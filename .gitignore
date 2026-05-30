@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# fastembed downloads its model cache here on first run
+/.fastembed_cache
+.DS_Store

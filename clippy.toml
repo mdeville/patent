@@ -1,0 +1,2 @@
+# Lint config. CI runs `cargo clippy --all-targets -- -D warnings`.
+# Defaults are appropriate for this crate; tighten here as needed.
