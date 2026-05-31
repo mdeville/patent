@@ -1,19 +1,47 @@
 //! npm source — `GET https://registry.npmjs.org/-/v1/search?text=`.
 
+use serde::Deserialize;
+
 use super::Source;
 use crate::model::{Match, Query, Source as SourceId};
 use crate::Result;
 
+const DEFAULT_BASE_URL: &str = "https://registry.npmjs.org";
+
 /// Searches the npm registry.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Npm {
     client: reqwest::Client,
+    base_url: String,
 }
 
 impl Npm {
+    /// Construct against the live npm registry.
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self::with_base_url(client, DEFAULT_BASE_URL.to_string())
     }
+
+    /// Construct against an arbitrary base URL (used by tests).
+    pub fn with_base_url(client: reqwest::Client, base_url: String) -> Self {
+        Self { client, base_url }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchResponse {
+    objects: Vec<SearchObject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchObject {
+    package: Package,
+}
+
+#[derive(Debug, Deserialize)]
+struct Package {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -22,8 +50,33 @@ impl Source for Npm {
         SourceId::Npm
     }
 
-    async fn search(&self, _query: &Query) -> Result<Vec<Match>> {
-        let _ = &self.client;
-        todo!("M2: query npm search and map results into Match")
+    async fn search(&self, query: &Query) -> Result<Vec<Match>> {
+        let url = format!("{}/-/v1/search", self.base_url);
+        let text = query.keywords.join(" ");
+
+        let body: SearchResponse = self
+            .client
+            .get(&url)
+            .query(&[("text", text.as_str())])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        Ok(body
+            .objects
+            .into_iter()
+            .map(|o| Match {
+                // npm search exposes no integer download count, only a relative
+                // score; we leave popularity unset rather than fake a count.
+                url: format!("https://www.npmjs.com/package/{}", o.package.name),
+                name: o.package.name,
+                source: SourceId::Npm,
+                description: o.package.description.unwrap_or_default(),
+                popularity: None,
+                similarity: 0.0,
+            })
+            .collect())
     }
 }

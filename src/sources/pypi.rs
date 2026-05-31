@@ -1,22 +1,35 @@
 //! PyPI source.
 //!
-//! Note: PyPI has no public search API (the XML-RPC search endpoint was
-//! disabled). For v0 this either scrapes `https://pypi.org/search/?q=` or is
-//! dropped — resolve during M2; do not block the other four sources on it.
+//! PyPI has no public search API (the XML-RPC endpoint was disabled), so this
+//! scrapes the `https://pypi.org/search/?q=` results page with CSS selectors.
+//! Brittle by nature — if the markup changes the parse yields nothing, which is
+//! treated like any empty result (and the run is never blocked on it).
+
+use scraper::{Html, Selector};
 
 use super::Source;
 use crate::model::{Match, Query, Source as SourceId};
-use crate::Result;
+use crate::{Error, Result};
+
+const DEFAULT_BASE_URL: &str = "https://pypi.org";
+const USER_AGENT: &str = concat!("patent/", env!("CARGO_PKG_VERSION"), " (prior-art search)");
 
 /// Searches PyPI (scrape-based; see module note).
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PyPI {
     client: reqwest::Client,
+    base_url: String,
 }
 
 impl PyPI {
+    /// Construct against the live PyPI site.
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self::with_base_url(client, DEFAULT_BASE_URL.to_string())
+    }
+
+    /// Construct against an arbitrary base URL (used by tests).
+    pub fn with_base_url(client: reqwest::Client, base_url: String) -> Self {
+        Self { client, base_url }
     }
 }
 
@@ -26,8 +39,71 @@ impl Source for PyPI {
         SourceId::PyPI
     }
 
-    async fn search(&self, _query: &Query) -> Result<Vec<Match>> {
-        let _ = &self.client;
-        todo!("M2: scrape pypi.org/search (or drop for v0)")
+    async fn search(&self, query: &Query) -> Result<Vec<Match>> {
+        let url = format!("{}/search/", self.base_url);
+        let q = query.keywords.join(" ");
+
+        let html = self
+            .client
+            .get(&url)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .query(&[("q", q.as_str())])
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+
+        // Synchronous parse only — `scraper` types are not `Send`, so nothing
+        // here may be held across an `.await`.
+        parse_search_html(&html)
     }
+}
+
+/// Parse a PyPI search results page into matches. A package with no name is
+/// skipped; a missing description becomes empty.
+fn parse_search_html(html: &str) -> Result<Vec<Match>> {
+    // `Selector::parse` only fails on a malformed selector literal — these are
+    // constants, so a failure is a programmer error, surfaced as a parse error.
+    let snippet = Selector::parse("a.package-snippet")
+        .map_err(|e| Error::Parse(format!("bad selector: {e}")))?;
+    let name = Selector::parse(".package-snippet__name")
+        .map_err(|e| Error::Parse(format!("bad selector: {e}")))?;
+    let description = Selector::parse(".package-snippet__description")
+        .map_err(|e| Error::Parse(format!("bad selector: {e}")))?;
+
+    let document = Html::parse_document(html);
+    let mut matches = Vec::new();
+
+    for element in document.select(&snippet) {
+        let Some(name_text) = element
+            .select(&name)
+            .next()
+            .map(|n| n.text().collect::<String>().trim().to_string())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+
+        let description_text = element
+            .select(&description)
+            .next()
+            .map(|d| d.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+
+        // The href (`/project/NAME/`) is relative; surface the canonical page.
+        let href = element.value().attr("href").unwrap_or("");
+        let url = format!("{DEFAULT_BASE_URL}{href}");
+
+        matches.push(Match {
+            name: name_text,
+            source: SourceId::PyPI,
+            url,
+            description: description_text,
+            popularity: None,
+            similarity: 0.0,
+        });
+    }
+
+    Ok(matches)
 }
