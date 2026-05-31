@@ -5,3 +5,6 @@
 # fastembed downloads its model cache here on first run
 /.fastembed_cache
 .DS_Store
+
+# local-only notes (e.g. plan source path)
+/.plan-source.md

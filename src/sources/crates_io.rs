@@ -1,19 +1,55 @@
 //! crates.io source — `GET https://crates.io/api/v1/crates?q=`.
 
+use serde::Deserialize;
+
 use super::Source;
 use crate::model::{Match, Query, Source as SourceId};
 use crate::Result;
 
+/// Default crates.io host. Overridable in tests via [`CratesIo::with_base_url`].
+const DEFAULT_BASE_URL: &str = "https://crates.io";
+
+/// User-Agent sent on every request — crates.io rejects requests without one.
+const USER_AGENT: &str = concat!(
+    "patent/",
+    env!("CARGO_PKG_VERSION"),
+    " (prior-art search; https://github.com/riad/patent)"
+);
+
 /// Searches the crates.io registry.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct CratesIo {
     client: reqwest::Client,
+    base_url: String,
 }
 
 impl CratesIo {
+    /// Construct against the live crates.io host.
     pub fn new(client: reqwest::Client) -> Self {
-        Self { client }
+        Self::with_base_url(client, DEFAULT_BASE_URL.to_string())
     }
+
+    /// Construct against an arbitrary base URL (used by tests to point at a mock
+    /// server). `base_url` should have no trailing slash.
+    pub fn with_base_url(client: reqwest::Client, base_url: String) -> Self {
+        Self { client, base_url }
+    }
+}
+
+/// Top-level shape of the crates.io search response.
+#[derive(Debug, Deserialize)]
+struct SearchResponse {
+    crates: Vec<CrateHit>,
+}
+
+/// A single crate in the `crates` array. Only the fields we surface are decoded.
+#[derive(Debug, Deserialize)]
+struct CrateHit {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    downloads: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -22,8 +58,32 @@ impl Source for CratesIo {
         SourceId::CratesIo
     }
 
-    async fn search(&self, _query: &Query) -> Result<Vec<Match>> {
-        let _ = &self.client;
-        todo!("M1: query crates.io and map results into Match")
+    async fn search(&self, query: &Query) -> Result<Vec<Match>> {
+        let url = format!("{}/api/v1/crates", self.base_url);
+        let q = query.keywords.join(" ");
+
+        let response = self
+            .client
+            .get(&url)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .query(&[("q", q.as_str())])
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let body: SearchResponse = response.json().await?;
+
+        Ok(body
+            .crates
+            .into_iter()
+            .map(|c| Match {
+                url: format!("{DEFAULT_BASE_URL}/crates/{}", c.name),
+                name: c.name,
+                source: SourceId::CratesIo,
+                description: c.description.unwrap_or_default(),
+                popularity: c.downloads,
+                similarity: 0.0,
+            })
+            .collect())
     }
 }
