@@ -27,9 +27,31 @@ impl Ollama {
     }
 
     /// Send a prompt to `/api/generate` and return the completion text.
-    pub async fn generate(&self, _prompt: &str) -> crate::Result<String> {
-        let _ = (&self.endpoint, &self.model, &self.client);
-        todo!("M4: POST /api/generate; map connection errors to Error::OllamaUnreachable")
+    pub async fn generate(&self, prompt: &str) -> crate::Result<String> {
+        let url = format!("{}/api/generate", self.endpoint);
+        let body = serde_json::json!({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": false,
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| crate::Error::OllamaUnreachable(format!("{}: {e}", self.endpoint)))?;
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| crate::Error::Parse(e.to_string()))?;
+
+        json["response"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| crate::Error::Parse("missing 'response' field".into()))
     }
 }
 
