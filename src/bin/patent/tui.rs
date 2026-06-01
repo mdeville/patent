@@ -1,10 +1,10 @@
-//! ratatui interface (M5).
+//! ratatui interface.
 //!
 //! Header (idea + sources-checked transparency line), verdict panel
 //! (🟢/🟡/🔴 + headline + gaps + caveat), and a scrollable/filterable matches
-//! table. `↑/↓` scroll, `/` filter, `Enter` open URL, `q` quit.
+//! table. `↑/↓` scroll, `/` filter, `m` show more, `Enter` open URL, `q` quit.
 
-use patent::model::{Match, Saturation, Verdict};
+use patent::model::{Match, Saturation, Source, Verdict};
 use patent::tui::{App, Mode};
 use ratatui::{
     layout::{Constraint, Layout},
@@ -13,6 +13,13 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
     DefaultTerminal, Frame,
 };
+
+const CYAN: Color = Color::Cyan;
+const DIM: Color = Color::Rgb(100, 100, 100);
+const STRIPE: Color = Color::Rgb(30, 30, 40);
+const SELECT_BG: Color = Color::Rgb(50, 50, 80);
+const SELECT_FG: Color = Color::White;
+const BORDER: Color = Color::Rgb(80, 80, 100);
 
 fn level_icon(level: Saturation) -> &'static str {
     match level {
@@ -30,6 +37,32 @@ fn level_color(level: Saturation) -> Color {
     }
 }
 
+fn score_color(sim: f32) -> Color {
+    if sim >= 0.7 {
+        Color::Green
+    } else if sim >= 0.4 {
+        Color::Yellow
+    } else {
+        Color::Red
+    }
+}
+
+fn source_color(source: Source) -> Color {
+    match source {
+        Source::CratesIo => Color::Yellow,
+        Source::GitHub => Color::White,
+        Source::Npm => Color::Red,
+        Source::PyPI => Color::Blue,
+        Source::HackerNews => Color::Rgb(255, 102, 0),
+        Source::Go => Color::Cyan,
+        Source::Maven => Color::Rgb(200, 50, 50),
+        Source::RubyGems => Color::Magenta,
+        Source::DockerHub => Color::Rgb(30, 144, 255),
+        Source::VsCodeMarketplace => Color::Rgb(0, 122, 204),
+        Source::NuGet => Color::Rgb(100, 45, 170),
+    }
+}
+
 fn draw(frame: &mut Frame, app: &App) {
     let verdict = app.verdict();
     let gap_rows = verdict.gaps.len() as u16;
@@ -43,111 +76,224 @@ fn draw(frame: &mut Frame, app: &App) {
     ])
     .areas(frame.area());
 
+    let border_style = Style::default().fg(BORDER);
+
     // -- header
-    let sources_str: String = verdict
+    let sources: Vec<Span> = verdict
         .sources_checked
         .iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
+        .enumerate()
+        .flat_map(|(i, s)| {
+            let mut spans = Vec::new();
+            if i > 0 {
+                spans.push(Span::styled(" · ", Style::default().fg(DIM)));
+            }
+            spans.push(Span::styled(
+                s.to_string(),
+                Style::default().fg(source_color(*s)),
+            ));
+            spans
+        })
+        .collect();
+
+    let mut source_line = vec![Span::styled(" Sources: ", Style::default().fg(DIM))];
+    source_line.extend(sources);
+
     let header = Paragraph::new(vec![
-        Line::from(Span::styled(
-            format!(" 🔍 {}", app.idea()),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::raw(format!(" Sources checked: {sources_str}"))),
+        Line::from(vec![
+            Span::styled(" 🔍 ", Style::default()),
+            Span::styled(
+                app.idea(),
+                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(source_line),
     ])
-    .block(Block::default().borders(Borders::BOTTOM));
+    .block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(border_style),
+    );
     frame.render_widget(header, header_area);
 
     // -- verdict panel
     let color = level_color(verdict.level);
     let mut lines = vec![
-        Line::from(Span::styled(
-            format!(
-                " {} {:?} — {}",
-                level_icon(verdict.level),
-                verdict.level,
-                verdict.headline,
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("{} {}", level_icon(verdict.level), verdict.level),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )),
+            Span::styled(" — ", Style::default().fg(DIM)),
+            Span::styled(
+                &verdict.headline,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::raw(""),
     ];
     for gap in &verdict.gaps {
-        lines.push(Line::from(Span::raw(format!("  • {gap}"))));
+        lines.push(Line::from(vec![
+            Span::styled("  • ", Style::default().fg(Color::Yellow)),
+            Span::styled(gap.as_str(), Style::default().fg(Color::White)),
+        ]));
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
-        format!(" ⚠ {}", verdict.caveat),
-        Style::default().fg(Color::DarkGray),
+        format!(" ⚠  {}", verdict.caveat),
+        Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
     )));
-    let verdict_panel = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::BOTTOM).title(" Verdict "));
+    let verdict_panel = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(border_style)
+            .title(Span::styled(
+                " Verdict ",
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )),
+    );
     frame.render_widget(verdict_panel, verdict_area);
 
     // -- matches table
-    let visible = app.visible_matches();
-    let selected_style = Style::default()
-        .bg(Color::DarkGray)
-        .add_modifier(Modifier::BOLD);
-    let rows: Vec<Row> = visible
+    let displayed = app.displayed_matches();
+    let total_visible = app.visible_matches().len();
+
+    let rows: Vec<Row> = displayed
         .iter()
         .enumerate()
         .map(|(i, m)| {
-            let row = Row::new(vec![
-                format!("{:.2}", m.similarity),
-                m.name.clone(),
-                m.source.to_string(),
-                m.description.clone(),
-            ]);
-            if i == app.cursor() {
-                row.style(selected_style)
+            let is_selected = i == app.cursor();
+            let base = if is_selected {
+                Style::default().bg(SELECT_BG).fg(SELECT_FG)
+            } else if i % 2 == 1 {
+                Style::default().bg(STRIPE)
             } else {
-                row
-            }
+                Style::default()
+            };
+
+            let score_style = if is_selected {
+                base.fg(score_color(m.similarity))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                base.fg(score_color(m.similarity))
+            };
+
+            let src_style = if is_selected {
+                base.add_modifier(Modifier::BOLD)
+            } else {
+                base.fg(source_color(m.source))
+            };
+
+            let name_style = if is_selected {
+                base.add_modifier(Modifier::BOLD)
+            } else {
+                base.fg(Color::White)
+            };
+
+            let desc_style = if is_selected {
+                base
+            } else {
+                base.fg(Color::Gray)
+            };
+
+            Row::new(vec![
+                ratatui::widgets::Cell::from(format!("{:.2}", m.similarity)).style(score_style),
+                ratatui::widgets::Cell::from(m.name.as_str()).style(name_style),
+                ratatui::widgets::Cell::from(m.source.to_string()).style(src_style),
+                ratatui::widgets::Cell::from(m.description.as_str()).style(desc_style),
+            ])
+            .style(base)
         })
         .collect();
 
-    let filter_indicator = if app.mode() == Mode::Filter {
+    let title = if app.mode() == Mode::Filter {
         format!(" Matches [/{}] ", app.filter_text())
     } else if !app.filter_text().is_empty() {
         format!(" Matches [{}] ", app.filter_text())
+    } else if app.has_more() {
+        format!(
+            " Matches ({}/{} — press m for more) ",
+            displayed.len(),
+            total_visible
+        )
+    } else if app.is_expanded() {
+        format!(" Matches (all {}) ", displayed.len())
     } else {
-        " Matches ".to_string()
+        format!(" Matches ({}) ", displayed.len())
     };
+
+    let header_style = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
 
     let table = Table::new(
         rows,
         [
             Constraint::Length(6),
-            Constraint::Length(20),
-            Constraint::Length(12),
+            Constraint::Length(24),
+            Constraint::Length(14),
             Constraint::Min(20),
         ],
     )
     .header(
         Row::new(vec!["Score", "Name", "Source", "Description"])
-            .style(Style::default().add_modifier(Modifier::BOLD)),
+            .style(header_style)
+            .bottom_margin(1),
     )
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(filter_indicator),
+            .border_style(border_style)
+            .title(Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
     );
     frame.render_widget(table, table_area);
 
     // -- help bar
-    let help_text = match app.mode() {
-        Mode::Normal => " ↑/↓ scroll  /  filter  Enter open  q quit",
-        Mode::Filter => " type to filter  Esc cancel  Enter confirm",
+    let help_spans = match app.mode() {
+        Mode::Normal => {
+            let mut spans = vec![
+                key_span("↑↓"),
+                label_span(" scroll  "),
+                key_span("/"),
+                label_span(" filter  "),
+            ];
+            if app.has_more() {
+                spans.extend([key_span("m"), label_span(" show more  ")]);
+            } else if app.is_expanded() {
+                spans.extend([key_span("m"), label_span(" show less  ")]);
+            }
+            spans.extend([
+                key_span("Enter"),
+                label_span(" open  "),
+                key_span("q"),
+                label_span(" quit"),
+            ]);
+            spans
+        }
+        Mode::Filter => vec![
+            label_span("type to filter  "),
+            key_span("Esc"),
+            label_span(" cancel  "),
+            key_span("Enter"),
+            label_span(" confirm"),
+        ],
     };
-    let help = Paragraph::new(Span::styled(
-        help_text,
-        Style::default().fg(Color::DarkGray),
-    ));
+    let help = Paragraph::new(Line::from(help_spans));
     frame.render_widget(help, help_area);
+}
+
+fn key_span(text: &str) -> Span<'_> {
+    Span::styled(text, Style::default().fg(CYAN).add_modifier(Modifier::BOLD))
+}
+
+fn label_span(text: &str) -> Span<'_> {
+    Span::styled(text, Style::default().fg(DIM))
 }
 
 fn handle_event(app: &mut App) -> std::io::Result<()> {
@@ -171,6 +317,7 @@ fn handle_event(app: &mut App) -> std::io::Result<()> {
                 KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
                 KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
                 KeyCode::Char('/') => app.enter_filter(),
+                KeyCode::Char('m') => app.toggle_expand(),
                 KeyCode::Enter => {
                     if let Some(url) = app.selected_url() {
                         let _ = open::that(url);

@@ -1,4 +1,4 @@
-//! Semantic ranking (M3).
+//! Semantic ranking.
 //!
 //! Embeds the idea and each match description with `fastembed`, computes cosine
 //! similarity, dedups, sorts, and keeps the top N.
@@ -6,7 +6,7 @@
 use crate::model::{Match, Query};
 
 /// Default number of matches to keep after ranking.
-pub const DEFAULT_LIMIT: usize = 15;
+pub const DEFAULT_LIMIT: usize = 50;
 
 /// Cosine similarity between two equal-length vectors, in `[-1.0, 1.0]`.
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -37,36 +37,77 @@ fn score_sort_limit(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     matches.truncate(limit);
+    matches.retain(|m| m.similarity >= 0.0);
     matches
 }
 
-/// Embed the idea + descriptions, rank by cosine similarity, keep top `limit`.
+/// Pre-loaded embedding model for reuse across pipeline stages.
+///
+/// Splitting model init from ranking lets the binary overlap the expensive model
+/// load (~1-3 s) with I/O-bound source searches.
+pub struct Ranker {
+    model: fastembed::TextEmbedding,
+}
+
+impl Ranker {
+    /// Load the embedding model. This is the expensive step.
+    pub fn new() -> crate::Result<Self> {
+        let model = fastembed::TextEmbedding::try_new(
+            fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
+                .with_show_download_progress(false),
+        )
+        .map_err(|e| crate::Error::Embedding(e.to_string()))?;
+        Ok(Self { model })
+    }
+
+    /// Embed a single query string. Call while sources are still fetching.
+    pub fn embed_query(&self, idea: &str) -> crate::Result<Vec<f32>> {
+        let embs = self
+            .model
+            .embed(vec![idea], None)
+            .map_err(|e| crate::Error::Embedding(e.to_string()))?;
+        Ok(embs.into_iter().next().unwrap_or_default())
+    }
+
+    /// Rank matches against a pre-computed query embedding.
+    pub fn rank_with(
+        &self,
+        query_emb: &[f32],
+        matches: Vec<Match>,
+        limit: usize,
+    ) -> crate::Result<Vec<Match>> {
+        if matches.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let texts: Vec<String> = matches
+            .iter()
+            .map(|m| {
+                if m.description.is_empty() {
+                    m.name.clone()
+                } else {
+                    format!("{}: {}", m.name, m.description)
+                }
+            })
+            .collect();
+        let descriptions: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let match_embs = self
+            .model
+            .embed(descriptions, None)
+            .map_err(|e| crate::Error::Embedding(e.to_string()))?;
+
+        Ok(score_sort_limit(query_emb, matches, &match_embs, limit))
+    }
+}
+
+/// Convenience wrapper: load model, embed, rank in one call.
 pub fn rank(query: &Query, matches: Vec<Match>, limit: usize) -> crate::Result<Vec<Match>> {
     if matches.is_empty() {
         return Ok(vec![]);
     }
-
-    let model = fastembed::TextEmbedding::try_new(
-        fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
-            .with_show_download_progress(false),
-    )
-    .map_err(|e| crate::Error::Embedding(e.to_string()))?;
-
-    let query_embs = model
-        .embed(vec![query.idea.as_str()], None)
-        .map_err(|e| crate::Error::Embedding(e.to_string()))?;
-
-    let descriptions: Vec<&str> = matches.iter().map(|m| m.description.as_str()).collect();
-    let match_embs = model
-        .embed(descriptions, None)
-        .map_err(|e| crate::Error::Embedding(e.to_string()))?;
-
-    Ok(score_sort_limit(
-        &query_embs[0],
-        matches,
-        &match_embs,
-        limit,
-    ))
+    let ranker = Ranker::new()?;
+    let query_emb = ranker.embed_query(&query.idea)?;
+    ranker.rank_with(&query_emb, matches, limit)
 }
 
 #[cfg(test)]

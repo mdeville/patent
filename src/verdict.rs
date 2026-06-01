@@ -1,4 +1,4 @@
-//! Verdict generation (M4).
+//! Verdict generation.
 //!
 //! Builds a prompt from the ranked matches and asks Ollama for a scoped verdict.
 //! The prompt **forbids claiming non-existence**: results are always phrased as
@@ -17,8 +17,9 @@ pub fn build_prompt(query: &Query, matches: &[Match]) -> String {
     let mut prompt = String::new();
 
     prompt.push_str(
-        "You are a prior-art analyst. The user has an idea for a dev tool and we searched \
-         several open-source registries for existing implementations.\n\n",
+        "You are a prior-art analyst for SOFTWARE DEVELOPER TOOLS ONLY. The user has an \
+         idea for a dev tool and we searched open-source registries (crates.io, npm, PyPI, \
+         GitHub, Hacker News) for existing implementations.\n\n",
     );
 
     prompt.push_str(&format!("## Idea\n{}\n\n", query.idea));
@@ -26,11 +27,25 @@ pub fn build_prompt(query: &Query, matches: &[Match]) -> String {
     if matches.is_empty() {
         prompt.push_str("## Matches\nNo matches were found in the sources checked.\n\n");
     } else {
-        prompt.push_str("## Matches found (ranked by similarity)\n");
-        for m in matches {
+        let top10: Vec<&Match> = matches.iter().take(10).collect();
+        let avg_sim: f32 = top10.iter().map(|m| m.similarity).sum::<f32>() / top10.len() as f32;
+
+        prompt.push_str("## Matches found (ranked by cosine similarity to the idea)\n");
+        prompt.push_str(&format!(
+            "Top-10 average similarity: {:.2} (scale: 0.0 = unrelated, 0.5 = tangential, \
+             0.7+ = strong match)\n\n",
+            avg_sim,
+        ));
+        for m in matches.iter().take(15) {
             prompt.push_str(&format!(
-                "- **{}** ({}, similarity {:.2}): {}\n",
+                "- **{}** ({}, sim {:.2}): {}\n",
                 m.name, m.source, m.similarity, m.description,
+            ));
+        }
+        if matches.len() > 15 {
+            prompt.push_str(&format!(
+                "- … and {} more with lower similarity\n",
+                matches.len() - 15
             ));
         }
         prompt.push('\n');
@@ -41,7 +56,24 @@ pub fn build_prompt(query: &Query, matches: &[Match]) -> String {
          - You can prove something EXISTS; you must NEVER claim something does not exist.\n\
          - All conclusions must be scoped to \"found in the sources checked\".\n\
          - Do not say \"this doesn't exist\" or \"there is no prior art\" — only that \
-           nothing close turned up in the sources checked.\n\n",
+           nothing close turned up in the sources checked.\n\
+         - If the idea is NOT about software, developer tools, or programming, respond \
+           with level \"Open\" and headline \"This does not appear to be a software tool \
+           idea — patent searches developer tool registries only.\"\n\
+         - Focus ONLY on matches that directly address the SPECIFIC feature described in \
+           the idea. Generic or tangential tools (e.g. a generic linter when the idea is \
+           a specific kind of linter) do NOT count as prior art.\n\n",
+    );
+
+    prompt.push_str(
+        "## How to choose the level\n\
+         Use the similarity scores — they measure how closely each match relates to the idea:\n\
+         - **Open**: no match has similarity >= 0.55, OR matches are only tangentially \
+           related (they share a category but not the specific feature).\n\
+         - **Crowded**: at least 2-3 matches with similarity >= 0.55 that directly \
+           address the same problem.\n\
+         - **Saturated**: 5+ strong matches (>= 0.60) covering the idea with little room \
+           for differentiation.\n\n",
     );
 
     prompt.push_str(
@@ -53,10 +85,7 @@ pub fn build_prompt(query: &Query, matches: &[Match]) -> String {
            \"headline\": \"one-sentence summary scoped to sources checked\",\n  \
            \"gaps\": [\"gap the user could fill\", ...]\n\
          }\n\
-         ```\n\
-         - Open: nothing close found in the sources checked.\n\
-         - Crowded: a few adjacent things exist.\n\
-         - Saturated: the space is densely populated.\n",
+         ```\n",
     );
 
     prompt
@@ -97,12 +126,13 @@ fn parse_verdict(raw: &str, sources_checked: Vec<Source>) -> crate::Result<Verdi
         .ok_or_else(|| crate::Error::Parse("missing 'headline'".into()))?
         .to_string();
 
-    let gaps = v["gaps"]
-        .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(|g| g.as_str().map(String::from))
-        .collect();
+    let gaps = match v["gaps"].as_array() {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|g| g.as_str().map(String::from))
+            .collect(),
+        None => vec![],
+    };
 
     Ok(Verdict {
         level,

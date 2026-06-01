@@ -33,7 +33,16 @@ async fn generate_sends_model_and_prompt() {
     Mock::given(method("POST"))
         .and(path("/api/generate"))
         .and(body_json_string(
-            json!({"model": "qwen2.5", "prompt": "say hi", "stream": false}).to_string(),
+            json!({
+                "model": "qwen2.5",
+                "prompt": "say hi",
+                "stream": false,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 512,
+                }
+            })
+            .to_string(),
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(generate_response("ok")))
         .expect(1)

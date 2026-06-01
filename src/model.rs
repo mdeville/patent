@@ -23,6 +23,12 @@ pub enum Source {
     Npm,
     PyPI,
     HackerNews,
+    Go,
+    Maven,
+    RubyGems,
+    DockerHub,
+    VsCodeMarketplace,
+    NuGet,
 }
 
 impl std::fmt::Display for Source {
@@ -33,6 +39,12 @@ impl std::fmt::Display for Source {
             Self::Npm => f.write_str("npm"),
             Self::PyPI => f.write_str("PyPI"),
             Self::HackerNews => f.write_str("Hacker News"),
+            Self::Go => f.write_str("Go"),
+            Self::Maven => f.write_str("Maven"),
+            Self::RubyGems => f.write_str("RubyGems"),
+            Self::DockerHub => f.write_str("Docker Hub"),
+            Self::VsCodeMarketplace => f.write_str("VS Code"),
+            Self::NuGet => f.write_str("NuGet"),
         }
     }
 }
@@ -60,6 +72,16 @@ pub enum Saturation {
     Crowded,
     /// 🔴 the space is densely populated.
     Saturated,
+}
+
+impl std::fmt::Display for Saturation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Open => f.write_str("Open"),
+            Self::Crowded => f.write_str("Crowded"),
+            Self::Saturated => f.write_str("Saturated"),
+        }
+    }
 }
 
 /// The model-written, integrity-scoped verdict.

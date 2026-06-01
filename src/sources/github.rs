@@ -79,6 +79,7 @@ impl SourceAdapter for GitHub {
         Ok(body
             .items
             .into_iter()
+            .filter(|r| r.description.as_ref().is_some_and(|d| !d.is_empty()))
             .map(|r| Match {
                 name: r.full_name,
                 source: Source::GitHub,
