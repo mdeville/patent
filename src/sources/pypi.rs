@@ -7,8 +7,8 @@
 
 use scraper::{Html, Selector};
 
-use super::Source;
-use crate::model::{Match, Query, Source as SourceId};
+use super::SourceAdapter;
+use crate::model::{Match, Query, Source};
 use crate::{Error, Result};
 
 const DEFAULT_BASE_URL: &str = "https://pypi.org";
@@ -34,9 +34,9 @@ impl PyPI {
 }
 
 #[async_trait::async_trait]
-impl Source for PyPI {
-    fn id(&self) -> SourceId {
-        SourceId::PyPI
+impl SourceAdapter for PyPI {
+    fn id(&self) -> Source {
+        Source::PyPI
     }
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
@@ -54,8 +54,6 @@ impl Source for PyPI {
             .text()
             .await?;
 
-        // Synchronous parse only — `scraper` types are not `Send`, so nothing
-        // here may be held across an `.await`.
         parse_search_html(&html)
     }
 }
@@ -63,8 +61,6 @@ impl Source for PyPI {
 /// Parse a PyPI search results page into matches. A package with no name is
 /// skipped; a missing description becomes empty.
 fn parse_search_html(html: &str) -> Result<Vec<Match>> {
-    // `Selector::parse` only fails on a malformed selector literal — these are
-    // constants, so a failure is a programmer error, surfaced as a parse error.
     let snippet = Selector::parse("a.package-snippet")
         .map_err(|e| Error::Parse(format!("bad selector: {e}")))?;
     let name = Selector::parse(".package-snippet__name")
@@ -91,13 +87,12 @@ fn parse_search_html(html: &str) -> Result<Vec<Match>> {
             .map(|d| d.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
-        // The href (`/project/NAME/`) is relative; surface the canonical page.
         let href = element.value().attr("href").unwrap_or("");
         let url = format!("{DEFAULT_BASE_URL}{href}");
 
         matches.push(Match {
             name: name_text,
-            source: SourceId::PyPI,
+            source: Source::PyPI,
             url,
             description: description_text,
             popularity: None,

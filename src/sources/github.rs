@@ -3,8 +3,8 @@
 
 use serde::Deserialize;
 
-use super::Source;
-use crate::model::{Match, Query, Source as SourceId};
+use super::SourceAdapter;
+use crate::model::{Match, Query, Source};
 use crate::Result;
 
 const DEFAULT_BASE_URL: &str = "https://api.github.com";
@@ -55,9 +55,9 @@ struct Repo {
 }
 
 #[async_trait::async_trait]
-impl Source for GitHub {
-    fn id(&self) -> SourceId {
-        SourceId::GitHub
+impl SourceAdapter for GitHub {
+    fn id(&self) -> Source {
+        Source::GitHub
     }
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
@@ -69,7 +69,7 @@ impl Source for GitHub {
             .get(&url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-            .query(&[("q", q.as_str())]);
+            .query(&[("q", q.as_str()), ("per_page", "20")]);
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
         }
@@ -81,7 +81,7 @@ impl Source for GitHub {
             .into_iter()
             .map(|r| Match {
                 name: r.full_name,
-                source: SourceId::GitHub,
+                source: Source::GitHub,
                 url: r.html_url,
                 description: r.description.unwrap_or_default(),
                 popularity: r.stargazers_count,

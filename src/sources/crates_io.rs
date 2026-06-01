@@ -2,8 +2,8 @@
 
 use serde::Deserialize;
 
-use super::Source;
-use crate::model::{Match, Query, Source as SourceId};
+use super::SourceAdapter;
+use crate::model::{Match, Query, Source};
 use crate::Result;
 
 /// Default crates.io host. Overridable in tests via [`CratesIo::with_base_url`].
@@ -53,9 +53,9 @@ struct CrateHit {
 }
 
 #[async_trait::async_trait]
-impl Source for CratesIo {
-    fn id(&self) -> SourceId {
-        SourceId::CratesIo
+impl SourceAdapter for CratesIo {
+    fn id(&self) -> Source {
+        Source::CratesIo
     }
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
@@ -66,7 +66,7 @@ impl Source for CratesIo {
             .client
             .get(&url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
-            .query(&[("q", q.as_str())])
+            .query(&[("q", q.as_str()), ("per_page", "20")])
             .send()
             .await?
             .error_for_status()?;
@@ -79,7 +79,7 @@ impl Source for CratesIo {
             .map(|c| Match {
                 url: format!("{DEFAULT_BASE_URL}/crates/{}", c.name),
                 name: c.name,
-                source: SourceId::CratesIo,
+                source: Source::CratesIo,
                 description: c.description.unwrap_or_default(),
                 popularity: c.downloads,
                 similarity: 0.0,
