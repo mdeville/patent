@@ -3,8 +3,8 @@
 
 use serde::Deserialize;
 
-use super::Source;
-use crate::model::{Match, Query, Source as SourceId};
+use super::SourceAdapter;
+use crate::model::{Match, Query, Source};
 use crate::Result;
 
 const DEFAULT_BASE_URL: &str = "https://hn.algolia.com";
@@ -45,10 +45,24 @@ struct Hit {
     points: Option<u64>,
 }
 
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(c),
+            _ => {}
+        }
+    }
+    result.trim().to_string()
+}
+
 #[async_trait::async_trait]
-impl Source for HackerNews {
-    fn id(&self) -> SourceId {
-        SourceId::HackerNews
+impl SourceAdapter for HackerNews {
+    fn id(&self) -> Source {
+        Source::HackerNews
     }
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
@@ -58,7 +72,7 @@ impl Source for HackerNews {
         let body: SearchResponse = self
             .client
             .get(&url)
-            .query(&[("query", q.as_str())])
+            .query(&[("query", q.as_str()), ("hitsPerPage", "20")])
             .send()
             .await?
             .error_for_status()?
@@ -70,11 +84,13 @@ impl Source for HackerNews {
             .into_iter()
             .map(|h| Match {
                 name: h.title.unwrap_or_default(),
-                source: SourceId::HackerNews,
-                // The canonical link is the HN discussion, not the (optional)
-                // outbound URL — the discussion is always present.
+                source: Source::HackerNews,
                 url: format!("https://news.ycombinator.com/item?id={}", h.object_id),
-                description: h.story_text.unwrap_or_default(),
+                description: h
+                    .story_text
+                    .as_deref()
+                    .map(strip_html_tags)
+                    .unwrap_or_default(),
                 popularity: h.points,
                 similarity: 0.0,
             })

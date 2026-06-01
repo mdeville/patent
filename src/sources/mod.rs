@@ -1,9 +1,10 @@
 //! Source registry: one implementor per ecosystem, fanned out concurrently.
 //!
-//! Each [`Source`] is independent and best-effort — a failing source is skipped
+//! Each source is independent and best-effort — a failing source is skipped
 //! and reported as "not reached", never fatal to the run.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use futures::future::join_all;
 
@@ -18,7 +19,7 @@ pub mod pypi;
 
 /// One searchable ecosystem (a registry, a forge, a community index).
 #[async_trait::async_trait]
-pub trait Source: Send + Sync {
+pub trait SourceAdapter: Send + Sync {
     /// Stable identifier, used in the transparency line.
     fn id(&self) -> crate::model::Source;
 
@@ -26,9 +27,18 @@ pub trait Source: Send + Sync {
     async fn search(&self, query: &Query) -> Result<Vec<Match>>;
 }
 
-/// Every source, sharing one HTTP client.
-fn default_sources() -> Vec<Box<dyn Source>> {
-    let client = reqwest::Client::new();
+/// Every source, sharing one HTTP client with timeouts.
+fn default_sources() -> Vec<Box<dyn SourceAdapter>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(5))
+        .user_agent(concat!(
+            "patent/",
+            env!("CARGO_PKG_VERSION"),
+            " (prior-art search)"
+        ))
+        .build()
+        .expect("failed to build HTTP client");
     vec![
         Box::new(crates_io::CratesIo::new(client.clone())),
         Box::new(github::GitHub::new(client.clone())),
@@ -39,22 +49,33 @@ fn default_sources() -> Vec<Box<dyn Source>> {
 }
 
 /// Fan out to every source concurrently, dropping the ones that fail.
-pub async fn search_all(query: &Query) -> Vec<Match> {
+/// Returns the deduped matches and which sources were reached.
+pub async fn search_all(query: &Query) -> (Vec<Match>, Vec<crate::model::Source>) {
     search_sources(&default_sources(), query).await
 }
 
 /// Run `query` against `sources` concurrently, skipping any that error, and
-/// dedup the combined results. Exposed for testing the fan-out in isolation.
-pub async fn search_sources(sources: &[Box<dyn Source>], query: &Query) -> Vec<Match> {
-    let results = join_all(sources.iter().map(|s| s.search(query))).await;
+/// dedup the combined results. Returns the deduped matches and which sources
+/// responded successfully. Exposed for testing the fan-out in isolation.
+pub async fn search_sources(
+    sources: &[Box<dyn SourceAdapter>],
+    query: &Query,
+) -> (Vec<Match>, Vec<crate::model::Source>) {
+    let results = join_all(sources.iter().map(|s| {
+        let id = s.id();
+        async move { (id, s.search(query).await) }
+    }))
+    .await;
 
-    // Best-effort: `flatten` drops the `Err` results, so a failing source is
-    // skipped, never fatal to the run.
+    let mut reached = Vec::new();
     let mut all = Vec::new();
-    for matches in results.into_iter().flatten() {
-        all.extend(matches);
+    for (id, result) in results {
+        if let Ok(matches) = result {
+            reached.push(id);
+            all.extend(matches);
+        }
     }
-    dedup(all)
+    (dedup(all), reached)
 }
 
 /// Remove duplicate matches by URL, keeping the first occurrence and preserving

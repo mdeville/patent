@@ -25,6 +25,18 @@ pub enum Source {
     HackerNews,
 }
 
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CratesIo => f.write_str("crates.io"),
+            Self::GitHub => f.write_str("GitHub"),
+            Self::Npm => f.write_str("npm"),
+            Self::PyPI => f.write_str("PyPI"),
+            Self::HackerNews => f.write_str("Hacker News"),
+        }
+    }
+}
+
 /// A single piece of prior art found in a [`Source`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Match {

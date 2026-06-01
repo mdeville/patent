@@ -2,8 +2,8 @@
 
 use serde::Deserialize;
 
-use super::Source;
-use crate::model::{Match, Query, Source as SourceId};
+use super::SourceAdapter;
+use crate::model::{Match, Query, Source};
 use crate::Result;
 
 const DEFAULT_BASE_URL: &str = "https://registry.npmjs.org";
@@ -45,9 +45,9 @@ struct Package {
 }
 
 #[async_trait::async_trait]
-impl Source for Npm {
-    fn id(&self) -> SourceId {
-        SourceId::Npm
+impl SourceAdapter for Npm {
+    fn id(&self) -> Source {
+        Source::Npm
     }
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
@@ -57,7 +57,7 @@ impl Source for Npm {
         let body: SearchResponse = self
             .client
             .get(&url)
-            .query(&[("text", text.as_str())])
+            .query(&[("text", text.as_str()), ("size", "20")])
             .send()
             .await?
             .error_for_status()?
@@ -68,11 +68,9 @@ impl Source for Npm {
             .objects
             .into_iter()
             .map(|o| Match {
-                // npm search exposes no integer download count, only a relative
-                // score; we leave popularity unset rather than fake a count.
                 url: format!("https://www.npmjs.com/package/{}", o.package.name),
                 name: o.package.name,
-                source: SourceId::Npm,
+                source: Source::Npm,
                 description: o.package.description.unwrap_or_default(),
                 popularity: None,
                 similarity: 0.0,

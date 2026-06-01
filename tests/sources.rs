@@ -12,7 +12,7 @@ use patent::sources::github::GitHub;
 use patent::sources::hacker_news::HackerNews;
 use patent::sources::npm::Npm;
 use patent::sources::pypi::PyPI;
-use patent::sources::{dedup, search_sources, Source};
+use patent::sources::{dedup, search_sources, SourceAdapter};
 use serde_json::json;
 use wiremock::matchers::{header_exists, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -641,6 +641,27 @@ async fn hn_server_error_is_propagated() {
     assert!(hn_for(&server).search(&query()).await.is_err());
 }
 
+#[tokio::test]
+async fn hn_strips_html_from_story_text() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "hits": [{
+            "title": "Show HN: Something",
+            "story_text": "<p>A tool that <b>does</b> things.</p>",
+            "objectID": "99999",
+            "points": 10
+        }]
+    });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let matches = hn_for(&server).search(&query()).await.unwrap();
+    assert_eq!(matches[0].description, "A tool that does things.");
+}
+
 // ---------------------------------------------------------------------------
 // Fan-out + dedup
 // ---------------------------------------------------------------------------
@@ -649,7 +670,7 @@ async fn hn_server_error_is_propagated() {
 struct FailingSource;
 
 #[async_trait::async_trait]
-impl Source for FailingSource {
+impl SourceAdapter for FailingSource {
     fn id(&self) -> SourceId {
         SourceId::PyPI
     }
@@ -702,7 +723,7 @@ async fn search_sources_skips_failing_sources() {
         .mount(&server)
         .await;
 
-    let sources: Vec<Box<dyn Source>> = vec![
+    let sources: Vec<Box<dyn SourceAdapter>> = vec![
         Box::new(FailingSource),
         Box::new(CratesIo::with_base_url(
             reqwest::Client::new(),
@@ -711,9 +732,10 @@ async fn search_sources_skips_failing_sources() {
     ];
 
     // The failing source is skipped, never fatal: we still get the crates.
-    let matches = search_sources(&sources, &query()).await;
+    let (matches, reached) = search_sources(&sources, &query()).await;
     assert_eq!(matches.len(), 2);
     assert!(matches.iter().all(|m| m.source == SourceId::CratesIo));
+    assert_eq!(reached, vec![SourceId::CratesIo]);
 }
 
 #[tokio::test]
@@ -726,7 +748,7 @@ async fn search_sources_dedups_across_sources() {
         .await;
 
     // Two identical crates.io sources -> overlapping URLs -> deduped to 2.
-    let sources: Vec<Box<dyn Source>> = vec![
+    let sources: Vec<Box<dyn SourceAdapter>> = vec![
         Box::new(CratesIo::with_base_url(
             reqwest::Client::new(),
             server.uri(),
@@ -737,12 +759,16 @@ async fn search_sources_dedups_across_sources() {
         )),
     ];
 
-    let matches = search_sources(&sources, &query()).await;
+    let (matches, reached) = search_sources(&sources, &query()).await;
     assert_eq!(matches.len(), 2);
+    assert_eq!(reached.len(), 2);
 }
 
 #[tokio::test]
 async fn search_sources_empty_when_all_fail() {
-    let sources: Vec<Box<dyn Source>> = vec![Box::new(FailingSource), Box::new(FailingSource)];
-    assert!(search_sources(&sources, &query()).await.is_empty());
+    let sources: Vec<Box<dyn SourceAdapter>> =
+        vec![Box::new(FailingSource), Box::new(FailingSource)];
+    let (matches, reached) = search_sources(&sources, &query()).await;
+    assert!(matches.is_empty());
+    assert!(reached.is_empty());
 }
