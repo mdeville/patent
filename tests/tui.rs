@@ -8,6 +8,7 @@ fn verdict() -> Verdict {
         headline: "Lots of prior art found in the sources checked.".into(),
         gaps: vec!["no Windows support".into(), "no async API".into()],
         sources_checked: vec![Source::Npm, Source::CratesIo, Source::GitHub],
+        sources_failed: vec![],
         caveat: CAVEAT.to_string(),
     }
 }

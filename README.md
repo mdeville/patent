@@ -18,8 +18,9 @@ patent "interactive cli to kill whatever's on a port"
 - **11 sources** — crates.io, npm, PyPI, GitHub, Go, Maven, NuGet, RubyGems,
   Docker Hub, VS Code Marketplace, Hacker News
 - **Smart source selection** — mentions "rust" and it searches crates.io;
-  mentions "docker" and it hits Docker Hub. No language mentioned? Broad sweep
-  across the largest registries.
+  mentions "docker" and it hits Docker Hub. GitHub and Hacker News (both
+  language-agnostic) are always searched; with no language signal it falls back
+  to a broad sweep across the largest registries.
 - **Semantic ranking** — local embeddings (AllMiniLM-L6-V2 via
   [fastembed](https://crates.io/crates/fastembed)) rank matches by cosine
   similarity to your idea
@@ -29,8 +30,9 @@ patent "interactive cli to kill whatever's on a port"
   help overlay
 - **JSON output** — `--json` for scripting and CI pipelines
 - **Fully local** — no data leaves your machine; embeddings and LLM run locally
-- **Graceful degradation** — Ollama down? Results still render without a
-  verdict. A source fails? It's skipped, never fatal.
+- **Graceful degradation** — Ollama down, or the model not pulled? Results
+  still render, ranked by similarity, without an AI verdict. A source fails?
+  It's skipped (and shown as "not reached"), never fatal.
 
 ## Install
 
@@ -70,11 +72,16 @@ Without Ollama, `patent` still searches and ranks — you just won't get the
 AI-generated verdict.
 
 **GitHub token** (optional) — the unauthenticated GitHub search API is limited
-to 10 requests/minute. Set a token for 30x higher limits:
+to 10 requests/minute. Set a token to raise that to 30 requests/minute (3×):
 
 ```bash
 export GITHUB_TOKEN=ghp_your_token_here
 ```
+
+**First run** — `patent` downloads a small (~80 MB) embedding model the first
+time it ranks results. It's cached under your OS cache directory (e.g.
+`~/Library/Caches/patent` on macOS, `~/.cache/patent` on Linux), so it's a
+one-time download shared across every directory you run from.
 
 ## Usage
 

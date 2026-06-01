@@ -1,8 +1,10 @@
 //! `patent` — a prior-art search for your code ideas.
 //!
-//! Takes a plain-English dev-tool idea and searches the open-source ecosystem
-//! (crates.io, GitHub, npm, PyPI, Hacker News) for prior art, then gives an
-//! honest, scoped verdict on whether it's already been built.
+//! Takes a plain-English dev-tool idea and searches the open-source ecosystem —
+//! crates.io, npm, PyPI, GitHub, Go, Maven, NuGet, RubyGems, Docker Hub, the VS
+//! Code Marketplace, and Hacker News — for prior art, then gives an honest,
+//! scoped verdict on whether it's already been built. The exact set searched is
+//! chosen per query; whichever sources actually responded are always surfaced.
 //!
 //! **Integrity principle:** this tool can prove something *exists*, but never
 //! that it *doesn't* — it only searched some sources. All output is scoped to
@@ -28,6 +30,11 @@ pub enum Error {
 
     #[error("ollama not reachable at {0} — run `ollama serve` and `ollama pull qwen2.5`")]
     OllamaUnreachable(String),
+
+    /// Ollama is reachable but rejected the request — most commonly because the
+    /// requested model has not been pulled. Carries a human-readable reason.
+    #[error("ollama could not generate a verdict: {0}")]
+    OllamaModel(String),
 
     #[error("embedding failed: {0}")]
     Embedding(String),

@@ -49,14 +49,30 @@ pub struct Ranker {
     model: fastembed::TextEmbedding,
 }
 
+/// Where the embedding model is cached between runs.
+///
+/// Defaults to a stable per-user cache directory (e.g. `~/.cache/patent` on
+/// Linux, `~/Library/Caches/patent` on macOS) so the ~80 MB model downloads
+/// once for the whole machine — not once per working directory, which is what
+/// `fastembed`'s default CWD-relative `.fastembed_cache` would do.
+fn model_cache_dir() -> Option<std::path::PathBuf> {
+    dirs::cache_dir().map(|d| d.join("patent").join("fastembed"))
+}
+
 impl Ranker {
-    /// Load the embedding model. This is the expensive step.
+    /// Load the embedding model. This is the expensive step; on the very first
+    /// run it downloads ~80 MB into [`model_cache_dir`].
     pub fn new() -> crate::Result<Self> {
-        let model = fastembed::TextEmbedding::try_new(
-            fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
-                .with_show_download_progress(true),
-        )
-        .map_err(|e| crate::Error::Embedding(e.to_string()))?;
+        let mut opts = fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
+            .with_show_download_progress(true);
+        if let Some(dir) = model_cache_dir() {
+            // Ensure the nested cache path exists before the downloader writes
+            // into it (it won't always create intermediate directories).
+            let _ = std::fs::create_dir_all(&dir);
+            opts = opts.with_cache_dir(dir);
+        }
+        let model = fastembed::TextEmbedding::try_new(opts)
+            .map_err(|e| crate::Error::Embedding(e.to_string()))?;
         Ok(Self { model })
     }
 

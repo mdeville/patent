@@ -11,9 +11,9 @@ pub struct Cli {
     #[arg(required_unless_present = "completions")]
     pub idea: Option<String>,
 
-    /// Max number of matches to keep after ranking.
-    #[arg(long, default_value_t = patent::rank::DEFAULT_LIMIT)]
-    pub limit: usize,
+    /// Max number of matches to keep after ranking (must be at least 1).
+    #[arg(long, default_value_t = patent::rank::DEFAULT_LIMIT as u32, value_parser = clap::value_parser!(u32).range(1..))]
+    pub limit: u32,
 
     /// Ollama model to use for the verdict.
     #[arg(long, default_value = patent::ollama::DEFAULT_MODEL)]

@@ -8,11 +8,17 @@
 
 use patent::model::{Match, Query, Source as SourceId};
 use patent::sources::crates_io::CratesIo;
+use patent::sources::docker_hub::DockerHub;
 use patent::sources::github::GitHub;
+use patent::sources::go::GoPkgDev;
 use patent::sources::hacker_news::HackerNews;
+use patent::sources::maven::Maven;
 use patent::sources::npm::Npm;
+use patent::sources::nuget::NuGet;
 use patent::sources::pypi::PyPI;
-use patent::sources::{dedup, search_sources, SourceAdapter};
+use patent::sources::rubygems::RubyGems;
+use patent::sources::vscode::VsCodeMarketplace;
+use patent::sources::{dedup, search_sources, SearchOutcome, SourceAdapter};
 use serde_json::json;
 use wiremock::matchers::{header_exists, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -482,13 +488,14 @@ async fn pypi_scrapes_packages_into_matches() {
     let first = &matches[0];
     assert_eq!(first.name, "requests");
     assert_eq!(first.source, SourceId::PyPI);
-    assert_eq!(first.url, "https://pypi.org/project/requests/");
+    // The URL is built from the (mock) base_url + the relative href.
+    assert!(first.url.ends_with("/project/requests/"));
     assert_eq!(first.description, "Python HTTP for Humans.");
     assert_eq!(first.popularity, None);
     assert_eq!(first.similarity, 0.0);
 
     assert_eq!(matches[1].name, "httpx");
-    assert_eq!(matches[1].url, "https://pypi.org/project/httpx/");
+    assert!(matches[1].url.ends_with("/project/httpx/"));
 }
 
 #[tokio::test]
@@ -731,11 +738,17 @@ async fn search_sources_skips_failing_sources() {
         )),
     ];
 
-    // The failing source is skipped, never fatal: we still get the crates.
-    let (matches, reached) = search_sources(&sources, &query()).await;
+    // The failing source is skipped, never fatal: we still get the crates,
+    // and the failed source is reported so reduced coverage is visible.
+    let SearchOutcome {
+        matches,
+        reached,
+        failed,
+    } = search_sources(&sources, &query()).await;
     assert_eq!(matches.len(), 2);
     assert!(matches.iter().all(|m| m.source == SourceId::CratesIo));
     assert_eq!(reached, vec![SourceId::CratesIo]);
+    assert_eq!(failed, vec![SourceId::PyPI]);
 }
 
 #[tokio::test]
@@ -759,7 +772,9 @@ async fn search_sources_dedups_across_sources() {
         )),
     ];
 
-    let (matches, reached) = search_sources(&sources, &query()).await;
+    let SearchOutcome {
+        matches, reached, ..
+    } = search_sources(&sources, &query()).await;
     assert_eq!(matches.len(), 2);
     assert_eq!(reached.len(), 2);
 }
@@ -768,7 +783,351 @@ async fn search_sources_dedups_across_sources() {
 async fn search_sources_empty_when_all_fail() {
     let sources: Vec<Box<dyn SourceAdapter>> =
         vec![Box::new(FailingSource), Box::new(FailingSource)];
-    let (matches, reached) = search_sources(&sources, &query()).await;
+    let SearchOutcome {
+        matches,
+        reached,
+        failed,
+    } = search_sources(&sources, &query()).await;
     assert!(matches.is_empty());
     assert!(reached.is_empty());
+    assert_eq!(failed.len(), 2, "both failing sources must be reported");
+}
+
+// ---------------------------------------------------------------------------
+// Go (pkg.go.dev HTML scrape)
+// ---------------------------------------------------------------------------
+
+fn go_html() -> String {
+    r#"<!doctype html><html><body>
+      <div class="SearchSnippet">
+        <a href="/github.com/spf13/cobra">cobra</a>
+        <p class="SearchSnippet-synopsis">A Commander for modern Go CLI interactions.</p>
+      </div>
+    </body></html>"#
+        .to_string()
+}
+
+#[tokio::test]
+async fn go_id_is_go() {
+    let src = GoPkgDev::with_base_url(reqwest::Client::new(), "https://pkg.go.dev".to_string());
+    assert_eq!(src.id(), SourceId::Go);
+}
+
+#[tokio::test]
+async fn go_scrapes_packages_into_matches() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search"))
+        .and(query_param("q", "async runtime"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(go_html()))
+        .mount(&server)
+        .await;
+
+    let src = GoPkgDev::with_base_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "cobra");
+    assert_eq!(matches[0].source, SourceId::Go);
+    assert!(matches[0].url.ends_with("/github.com/spf13/cobra"));
+    assert_eq!(
+        matches[0].description,
+        "A Commander for modern Go CLI interactions."
+    );
+}
+
+#[tokio::test]
+async fn go_server_error_is_propagated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let src = GoPkgDev::with_base_url(reqwest::Client::new(), server.uri());
+    assert!(src.search(&query()).await.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Maven Central (Solr JSON)
+// ---------------------------------------------------------------------------
+
+fn maven_body() -> serde_json::Value {
+    json!({
+        "response": {
+            "docs": [
+                { "g": "com.google.guava", "a": "guava", "versionCount": 50 }
+            ]
+        }
+    })
+}
+
+#[tokio::test]
+async fn maven_id_is_maven() {
+    let src = Maven::with_base_url(
+        reqwest::Client::new(),
+        "https://search.maven.org".to_string(),
+    );
+    assert_eq!(src.id(), SourceId::Maven);
+}
+
+#[tokio::test]
+async fn maven_maps_artifacts_into_matches() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/solrsearch/select"))
+        .and(query_param("q", "async runtime"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(maven_body()))
+        .mount(&server)
+        .await;
+
+    let src = Maven::with_base_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "com.google.guava:guava");
+    assert_eq!(matches[0].source, SourceId::Maven);
+    assert_eq!(
+        matches[0].url,
+        "https://central.sonatype.com/artifact/com.google.guava/guava"
+    );
+    assert_eq!(matches[0].popularity, Some(50));
+}
+
+#[tokio::test]
+async fn maven_server_error_is_propagated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/solrsearch/select"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let src = Maven::with_base_url(reqwest::Client::new(), server.uri());
+    assert!(src.search(&query()).await.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// NuGet (.NET)
+// ---------------------------------------------------------------------------
+
+fn nuget_body() -> serde_json::Value {
+    json!({
+        "data": [
+            { "id": "Newtonsoft.Json", "description": "JSON framework for .NET", "totalDownloads": 100 },
+            { "id": "NoDescription", "description": "", "totalDownloads": 1 }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn nuget_id_is_nuget() {
+    let src = NuGet::with_search_url(
+        reqwest::Client::new(),
+        "https://azuresearch-usnc.nuget.org".to_string(),
+    );
+    assert_eq!(src.id(), SourceId::NuGet);
+}
+
+#[tokio::test]
+async fn nuget_maps_packages_and_filters_empty_descriptions() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/query"))
+        .and(query_param("q", "async runtime"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(nuget_body()))
+        .mount(&server)
+        .await;
+
+    let src = NuGet::with_search_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    // The empty-description package is filtered out.
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "Newtonsoft.Json");
+    assert_eq!(matches[0].source, SourceId::NuGet);
+    assert_eq!(
+        matches[0].url,
+        "https://www.nuget.org/packages/Newtonsoft.Json"
+    );
+    assert_eq!(matches[0].popularity, Some(100));
+}
+
+#[tokio::test]
+async fn nuget_server_error_is_propagated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/query"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let src = NuGet::with_search_url(reqwest::Client::new(), server.uri());
+    assert!(src.search(&query()).await.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// RubyGems
+// ---------------------------------------------------------------------------
+
+fn rubygems_body() -> serde_json::Value {
+    json!([
+        {
+            "name": "rails",
+            "info": "Full-stack web framework",
+            "project_uri": "https://rubygems.org/gems/rails",
+            "downloads": 999
+        }
+    ])
+}
+
+#[tokio::test]
+async fn rubygems_id_is_rubygems() {
+    let src = RubyGems::with_base_url(reqwest::Client::new(), "https://rubygems.org".to_string());
+    assert_eq!(src.id(), SourceId::RubyGems);
+}
+
+#[tokio::test]
+async fn rubygems_maps_gems_into_matches() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/search.json"))
+        .and(query_param("query", "async runtime"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rubygems_body()))
+        .mount(&server)
+        .await;
+
+    let src = RubyGems::with_base_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "rails");
+    assert_eq!(matches[0].source, SourceId::RubyGems);
+    assert_eq!(matches[0].url, "https://rubygems.org/gems/rails");
+    assert_eq!(matches[0].description, "Full-stack web framework");
+    assert_eq!(matches[0].popularity, Some(999));
+}
+
+#[tokio::test]
+async fn rubygems_server_error_is_propagated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/search.json"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let src = RubyGems::with_base_url(reqwest::Client::new(), server.uri());
+    assert!(src.search(&query()).await.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Docker Hub
+// ---------------------------------------------------------------------------
+
+fn docker_body() -> serde_json::Value {
+    json!({
+        "results": [
+            { "repo_name": "library/nginx", "short_description": "Official nginx image", "star_count": 200 },
+            { "repo_name": "no/desc", "short_description": "", "star_count": 1 }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn docker_hub_id_is_docker_hub() {
+    let src =
+        DockerHub::with_base_url(reqwest::Client::new(), "https://hub.docker.com".to_string());
+    assert_eq!(src.id(), SourceId::DockerHub);
+}
+
+#[tokio::test]
+async fn docker_hub_maps_repos_and_filters_empty_descriptions() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v2/search/repositories/"))
+        .and(query_param("query", "async runtime"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(docker_body()))
+        .mount(&server)
+        .await;
+
+    let src = DockerHub::with_base_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "library/nginx");
+    assert_eq!(matches[0].source, SourceId::DockerHub);
+    assert_eq!(matches[0].url, "https://hub.docker.com/r/library/nginx");
+    assert_eq!(matches[0].popularity, Some(200));
+}
+
+#[tokio::test]
+async fn docker_hub_server_error_is_propagated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v2/search/repositories/"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let src = DockerHub::with_base_url(reqwest::Client::new(), server.uri());
+    assert!(src.search(&query()).await.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// VS Code Marketplace (POST gallery query)
+// ---------------------------------------------------------------------------
+
+fn vscode_body() -> serde_json::Value {
+    json!({
+        "results": [{
+            "extensions": [{
+                "publisher": { "publisherName": "rust-lang" },
+                "extensionName": "rust-analyzer",
+                "displayName": "rust-analyzer",
+                "shortDescription": "Rust language support",
+                "statistics": [{ "statisticName": "install", "value": 12345.0 }]
+            }]
+        }]
+    })
+}
+
+#[tokio::test]
+async fn vscode_id_is_vscode() {
+    let src = VsCodeMarketplace::with_base_url(
+        reqwest::Client::new(),
+        "https://marketplace.visualstudio.com".to_string(),
+    );
+    assert_eq!(src.id(), SourceId::VsCodeMarketplace);
+}
+
+#[tokio::test]
+async fn vscode_maps_extensions_into_matches() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/_apis/public/gallery/extensionquery"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(vscode_body()))
+        .mount(&server)
+        .await;
+
+    let src = VsCodeMarketplace::with_base_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "rust-analyzer");
+    assert_eq!(matches[0].source, SourceId::VsCodeMarketplace);
+    assert_eq!(
+        matches[0].url,
+        "https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer"
+    );
+    assert_eq!(matches[0].description, "Rust language support");
+    assert_eq!(matches[0].popularity, Some(12345));
+}
+
+#[tokio::test]
+async fn vscode_server_error_is_propagated() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/_apis/public/gallery/extensionquery"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let src = VsCodeMarketplace::with_base_url(reqwest::Client::new(), server.uri());
+    assert!(src.search(&query()).await.is_err());
 }

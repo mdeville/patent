@@ -52,10 +52,38 @@ impl Ollama {
             .await
             .map_err(|e| crate::Error::OllamaUnreachable(format!("{}: {e}", self.endpoint)))?;
 
-        let json: serde_json::Value = response
-            .json()
+        let status = response.status();
+        let body = response
+            .text()
             .await
             .map_err(|e| crate::Error::Parse(e.to_string()))?;
+
+        // A non-success status (most commonly 404 for a model that hasn't been
+        // pulled, or a 5xx from a proxy in front of Ollama) is a recoverable
+        // error: surface it as OllamaModel so the caller still renders results
+        // instead of aborting. We try to lift Ollama's `{"error": "..."}`
+        // message but never depend on the body being JSON.
+        if !status.is_success() {
+            let reason = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                .unwrap_or_else(|| format!("Ollama returned HTTP {}", status.as_u16()));
+            return Err(crate::Error::OllamaModel(format!(
+                "{reason} (model `{}`) — run `ollama pull {}`",
+                self.model, self.model
+            )));
+        }
+
+        let json: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| crate::Error::Parse(e.to_string()))?;
+
+        // Some Ollama builds return 200 with an `{"error": ...}` body instead.
+        if let Some(err) = json.get("error").and_then(|e| e.as_str()) {
+            return Err(crate::Error::OllamaModel(format!(
+                "{err} (model `{}`) — run `ollama pull {}`",
+                self.model, self.model
+            )));
+        }
 
         json["response"]
             .as_str()
