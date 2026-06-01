@@ -61,7 +61,7 @@ impl Ranker {
     }
 
     /// Embed a single query string. Call while sources are still fetching.
-    pub fn embed_query(&self, idea: &str) -> crate::Result<Vec<f32>> {
+    pub fn embed_query(&mut self, idea: &str) -> crate::Result<Vec<f32>> {
         let embs = self
             .model
             .embed(vec![idea], None)
@@ -71,7 +71,7 @@ impl Ranker {
 
     /// Rank matches against a pre-computed query embedding.
     pub fn rank_with(
-        &self,
+        &mut self,
         query_emb: &[f32],
         matches: Vec<Match>,
         limit: usize,
@@ -105,7 +105,7 @@ pub fn rank(query: &Query, matches: Vec<Match>, limit: usize) -> crate::Result<V
     if matches.is_empty() {
         return Ok(vec![]);
     }
-    let ranker = Ranker::new()?;
+    let mut ranker = Ranker::new()?;
     let query_emb = ranker.embed_query(&query.idea)?;
     ranker.rank_with(&query_emb, matches, limit)
 }
