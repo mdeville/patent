@@ -6,18 +6,93 @@ mod tui;
 use clap::Parser;
 use cli::Cli;
 
+fn build_query(idea: &str) -> patent::Query {
+    let keywords: Vec<String> = idea
+        .split_whitespace()
+        .filter(|w| w.len() > 2)
+        .map(|w| w.to_lowercase())
+        .collect();
+    patent::Query {
+        idea: idea.to_string(),
+        keywords,
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
-    // Pipeline (wired up across M1–M5):
-    //   1. idea -> Query (keywords)
-    //   2. sources::search_all -> Vec<Match>   (concurrent fan-out, M2)
-    //   3. rank::rank -> top-N                  (M3)
-    //   4. verdict::assess via Ollama           (M4)
-    //   5. --json print | tui::run              (M5)
-    let _ = (&args.idea, args.limit, &args.model, args.json);
-    let _render: fn(&patent::Verdict, &[patent::Match]) -> anyhow::Result<()> = tui::run;
+    // 1. idea -> Query
+    let query = build_query(&args.idea);
+    eprintln!("🔍 Searching for prior art: \"{}\"", args.idea);
+    eprintln!("   keywords: {}", query.keywords.join(", "));
 
-    todo!("wire pipeline across M1-M5")
+    // 2. sources::search_all -> Vec<Match>
+    let (raw_matches, reached) = patent::sources::search_all(&query).await;
+    eprintln!(
+        "   {} matches from {} sources: {}",
+        raw_matches.len(),
+        reached.len(),
+        reached
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // 3. rank::rank -> top-N
+    eprintln!("📊 Ranking (embedding + cosine similarity)…");
+    let ranked = patent::rank::rank(&query, raw_matches, args.limit)?;
+
+    // 4. verdict via Ollama
+    eprintln!("🧠 Generating verdict via Ollama ({})…", args.model);
+    let ollama = patent::ollama::Ollama::new(patent::ollama::DEFAULT_ENDPOINT, &args.model);
+    let verdict = patent::verdict::assess(&ollama, &query, &ranked, reached.clone()).await?;
+
+    // 5. output
+    if args.json {
+        let output = serde_json::json!({
+            "verdict": verdict,
+            "matches": ranked,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        let icon = match verdict.level {
+            patent::Saturation::Open => "🟢",
+            patent::Saturation::Crowded => "🟡",
+            patent::Saturation::Saturated => "🔴",
+        };
+        println!("\n{icon} {:?} — {}", verdict.level, verdict.headline);
+        if !verdict.gaps.is_empty() {
+            println!("\nGaps:");
+            for gap in &verdict.gaps {
+                println!("  • {gap}");
+            }
+        }
+        println!("\nTop matches:");
+        for (i, m) in ranked.iter().enumerate() {
+            println!(
+                "{:>2}. [{:.2}] {} — {} ({})",
+                i + 1,
+                m.similarity,
+                m.name,
+                m.source,
+                m.url,
+            );
+            if !m.description.is_empty() {
+                println!("          {}", m.description);
+            }
+        }
+        eprintln!(
+            "\nSources checked: {}",
+            reached
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        eprintln!("⚠️  {}", patent::verdict::CAVEAT);
+    }
+
+    Ok(())
 }
