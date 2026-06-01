@@ -5,10 +5,11 @@ edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 description = "A prior-art search for your code ideas — has this dev tool already been shipped?"
-repository = "https://github.com/riad/patent"
+repository = "https://github.com/r14dd/patent"
 readme = "README.md"
 keywords = ["search", "cli", "prior-art", "semantic-search", "dev-tools"]
 categories = ["command-line-utilities"]
+exclude = [".github/", ".claude/"]
 
 [lib]
 name = "patent"
@@ -21,7 +22,8 @@ path = "src/bin/patent/main.rs"
 [dependencies]
 # CLI / runtime
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+clap_complete = "4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 futures = "0.3"
 async-trait = "0.1"
 

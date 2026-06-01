@@ -3,7 +3,7 @@
 mod cli;
 mod tui;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::Cli;
 
 /// Matches below this similarity are noise, not signal.
@@ -72,15 +72,21 @@ fn build_query(idea: &str) -> patent::Query {
 async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
-    validate_idea(&args.idea)?;
+    if let Some(shell) = args.completions {
+        clap_complete::generate(shell, &mut Cli::command(), "patent", &mut std::io::stdout());
+        return Ok(());
+    }
 
-    let query = build_query(&args.idea);
-    eprintln!("🔍 Searching for prior art: \"{}\"", args.idea);
+    let idea = args
+        .idea
+        .expect("idea is required when not using --completions");
+    validate_idea(&idea)?;
+
+    let query = build_query(&idea);
+    eprintln!("🔍 Searching for prior art: \"{}\"", idea);
     eprintln!("   keywords: {}", query.keywords.join(", "));
 
     // ── Phase 1: search sources AND load embedding model concurrently ───
-    // Model init is CPU-bound (~1-3 s), searches are I/O-bound (~2-5 s).
-    // Overlapping them saves the entire model-load latency.
     let t_start = std::time::Instant::now();
     let idea_for_embed = query.idea.clone();
     let (search_result, ranker_result) = tokio::join!(
@@ -141,9 +147,29 @@ async fn main() -> anyhow::Result<()> {
         let t_verdict = std::time::Instant::now();
         eprintln!("🧠 Generating verdict via Ollama ({})…", args.model);
         let ollama = patent::ollama::Ollama::new(patent::ollama::DEFAULT_ENDPOINT, &args.model);
-        let v = patent::verdict::assess(&ollama, &query, &ranked, reached).await?;
-        eprintln!("   verdict in {:.1}s", t_verdict.elapsed().as_secs_f64());
-        v
+        match patent::verdict::assess(&ollama, &query, &ranked, reached.clone()).await {
+            Ok(v) => {
+                eprintln!("   verdict in {:.1}s", t_verdict.elapsed().as_secs_f64());
+                v
+            }
+            Err(patent::Error::OllamaUnreachable(ref addr)) => {
+                eprintln!(
+                    "⚠  Ollama not reachable at {addr} — showing results without verdict.\n   \
+                     Run `ollama serve` and `ollama pull {model}` to enable AI verdicts.",
+                    model = args.model,
+                );
+                patent::Verdict {
+                    level: patent::Saturation::Open,
+                    headline: "Verdict unavailable — Ollama not reachable. \
+                               Results are ranked by semantic similarity only."
+                        .into(),
+                    gaps: vec![],
+                    sources_checked: reached,
+                    caveat: patent::verdict::CAVEAT.to_string(),
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
     };
 
     eprintln!("⏱  total: {:.1}s", t_start.elapsed().as_secs_f64());
@@ -151,13 +177,13 @@ async fn main() -> anyhow::Result<()> {
     // ── Phase 4: output ─────────────────────────────────────────────────
     if args.json {
         let output = serde_json::json!({
-            "query": args.idea,
+            "query": idea,
             "verdict": verdict,
             "matches": ranked,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        tui::run(&args.idea, &verdict, &ranked)?;
+        tui::run(&idea, &verdict, &ranked)?;
     }
 
     Ok(())

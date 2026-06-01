@@ -54,7 +54,7 @@ impl Ranker {
     pub fn new() -> crate::Result<Self> {
         let model = fastembed::TextEmbedding::try_new(
             fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
-                .with_show_download_progress(false),
+                .with_show_download_progress(true),
         )
         .map_err(|e| crate::Error::Embedding(e.to_string()))?;
         Ok(Self { model })

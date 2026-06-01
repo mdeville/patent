@@ -8,7 +8,8 @@ use clap::Parser;
 pub struct Cli {
     /// The dev-tool idea to search for, e.g.
     /// "interactive cli to kill whatever's on a port".
-    pub idea: String,
+    #[arg(required_unless_present = "completions")]
+    pub idea: Option<String>,
 
     /// Max number of matches to keep after ranking.
     #[arg(long, default_value_t = patent::rank::DEFAULT_LIMIT)]
@@ -21,4 +22,8 @@ pub struct Cli {
     /// Print structured JSON instead of launching the TUI.
     #[arg(long)]
     pub json: bool,
+
+    /// Generate shell completions and exit.
+    #[arg(long, value_name = "SHELL")]
+    pub completions: Option<clap_complete::Shell>,
 }

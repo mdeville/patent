@@ -12,6 +12,7 @@ pub const DEFAULT_PAGE: usize = 20;
 pub enum Mode {
     Normal,
     Filter,
+    Help,
 }
 
 pub struct App<'a> {
@@ -113,6 +114,26 @@ impl<'a> App<'a> {
         } else {
             self.cursor -= 1;
         }
+    }
+
+    pub fn total_matches(&self) -> usize {
+        self.matches.len()
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.cursor = self.display_limit().saturating_sub(1);
+    }
+
+    pub fn toggle_help(&mut self) {
+        self.mode = if self.mode == Mode::Help {
+            Mode::Normal
+        } else {
+            Mode::Help
+        };
     }
 
     pub fn enter_filter(&mut self) {
