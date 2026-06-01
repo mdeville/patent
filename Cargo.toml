@@ -19,6 +19,10 @@ exclude = [
     "clippy.toml",
     "rustfmt.toml",
     ".plan-source.md",
+    # Demo assets are served from GitHub (raw URLs in the README), not shipped
+    # in the crate tarball.
+    "demo.tape",
+    "demo.gif",
 ]
 
 [lib]

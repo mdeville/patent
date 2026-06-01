@@ -19,6 +19,10 @@ pub struct Cli {
     #[arg(long, default_value = patent::ollama::DEFAULT_MODEL)]
     pub model: String,
 
+    /// Skip the Ollama verdict for an instant, search-only result.
+    #[arg(long)]
+    pub fast: bool,
+
     /// Print structured JSON instead of launching the TUI.
     #[arg(long)]
     pub json: bool,

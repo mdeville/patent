@@ -1,5 +1,5 @@
 use patent::model::{Match, Saturation, Source, Verdict};
-use patent::tui::{App, Mode};
+use patent::tui::{App, Mode, SortKey};
 use patent::verdict::CAVEAT;
 
 fn verdict() -> Verdict {
@@ -547,4 +547,165 @@ fn verdict_accessor_returns_the_verdict() {
     assert_eq!(app.verdict().gaps.len(), 2);
     assert_eq!(app.verdict().sources_checked.len(), 3);
     assert_eq!(app.verdict().caveat, CAVEAT);
+}
+
+// -- sorting -----------------------------------------------------------------
+
+#[test]
+fn default_sort_is_similarity_descending() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("x", &v, &m);
+    assert_eq!(app.sort(), SortKey::Similarity);
+    let names: Vec<&str> = app
+        .visible_matches()
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(names, ["kill-port", "fkill-cli", "port-killer"]);
+}
+
+#[test]
+fn cycle_sort_advances_through_all_keys() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.cycle_sort();
+    assert_eq!(app.sort(), SortKey::Popularity);
+    app.cycle_sort();
+    assert_eq!(app.sort(), SortKey::Name);
+    app.cycle_sort();
+    assert_eq!(app.sort(), SortKey::Similarity);
+}
+
+#[test]
+fn sort_by_name_orders_alphabetically() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.cycle_sort(); // Popularity
+    app.cycle_sort(); // Name
+    let names: Vec<&str> = app
+        .visible_matches()
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(names, ["fkill-cli", "kill-port", "port-killer"]);
+}
+
+#[test]
+fn sort_by_popularity_orders_most_first() {
+    let v = verdict();
+    // Similarity order and popularity order deliberately disagree.
+    let m = vec![
+        Match {
+            name: "niche-but-relevant".into(),
+            source: Source::CratesIo,
+            url: "u1".into(),
+            description: String::new(),
+            popularity: Some(10),
+            similarity: 0.95,
+        },
+        Match {
+            name: "popular-but-loose".into(),
+            source: Source::Npm,
+            url: "u2".into(),
+            description: String::new(),
+            popularity: Some(99_999),
+            similarity: 0.50,
+        },
+    ];
+    let mut app = App::new("x", &v, &m);
+    assert_eq!(app.visible_matches()[0].name, "niche-but-relevant"); // similarity
+    app.cycle_sort(); // Popularity
+    assert_eq!(app.visible_matches()[0].name, "popular-but-loose");
+}
+
+#[test]
+fn cycle_sort_resets_cursor_to_top() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.scroll_down();
+    app.scroll_down();
+    app.cycle_sort();
+    assert_eq!(app.cursor(), 0);
+}
+
+#[test]
+fn sort_composes_with_filter() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.cycle_sort(); // Popularity
+    app.cycle_sort(); // Name
+    app.enter_filter();
+    for c in "port".chars() {
+        app.filter_push(c);
+    }
+    // "kill-port" and "port-killer" match "port", returned name-sorted.
+    let names: Vec<&str> = app
+        .visible_matches()
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(names, ["kill-port", "port-killer"]);
+}
+
+// -- detail view & row selection ---------------------------------------------
+
+#[test]
+fn enter_detail_switches_to_detail_mode() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_detail();
+    assert_eq!(app.mode(), Mode::Detail);
+    app.exit_detail();
+    assert_eq!(app.mode(), Mode::Normal);
+}
+
+#[test]
+fn enter_detail_is_noop_with_no_matches() {
+    let v = verdict();
+    let empty: Vec<Match> = vec![];
+    let mut app = App::new("x", &v, &empty);
+    app.enter_detail();
+    assert_eq!(app.mode(), Mode::Normal);
+}
+
+#[test]
+fn selected_match_tracks_cursor() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    assert_eq!(
+        app.selected_match().map(|m| m.name.as_str()),
+        Some("kill-port")
+    );
+    app.scroll_down();
+    assert_eq!(
+        app.selected_match().map(|m| m.name.as_str()),
+        Some("fkill-cli")
+    );
+}
+
+#[test]
+fn select_row_sets_and_clamps_cursor() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.select_row(1);
+    assert_eq!(app.cursor(), 1);
+    app.select_row(99); // clamps to the last visible row
+    assert_eq!(app.cursor(), 2);
+}
+
+#[test]
+fn select_row_on_empty_is_noop() {
+    let v = verdict();
+    let empty: Vec<Match> = vec![];
+    let mut app = App::new("x", &v, &empty);
+    app.select_row(3);
+    assert_eq!(app.cursor(), 0);
 }

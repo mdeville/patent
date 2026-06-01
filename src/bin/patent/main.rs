@@ -100,8 +100,17 @@ async fn main() -> anyhow::Result<()> {
     validate_idea(&idea)?;
 
     let query = build_query(&idea);
-    eprintln!("🔍 Searching for prior art: \"{}\"", idea);
+    eprintln!("Searching for prior art: \"{}\"", idea);
     eprintln!("   keywords: {}", query.keywords.join(", "));
+
+    // First-run friendliness: the ~80 MB embedding model downloads the first
+    // time we rank. Say so up front so the wait doesn't read as a hang before
+    // fastembed's own progress bar appears.
+    if !patent::rank::model_is_cached() {
+        eprintln!(
+            "patent: downloading the embedding model for local semantic search (~80 MB, one-time)..."
+        );
+    }
 
     // ── Phase 1: search sources AND load embedding model concurrently ───
     let t_start = std::time::Instant::now();
@@ -142,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             .expect("ranking task panicked")?;
     eprintln!(
-        "📊 Ranked to top {} in {:.1}s",
+        "Ranked to top {} in {:.1}s",
         ranked.len(),
         t_rank.elapsed().as_secs_f64(),
     );
@@ -160,9 +169,14 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let best_sim = ranked.first().map_or(0.0, |m| m.similarity);
-    let verdict = if best_sim < MIN_RELEVANCE {
+    let verdict = if args.fast {
+        // --fast: no model warm-up, no inference wait. The level is floored
+        // from the similarity data (still honest, still carries the caveat).
+        eprintln!("--fast: skipping Ollama — verdict from similarity data only");
+        patent::verdict::from_data(&ranked, reached.clone(), failed.clone())
+    } else if best_sim < MIN_RELEVANCE {
         eprintln!(
-            "⚠  Best similarity {:.2} < {:.2} — skipping verdict",
+            "warning: best similarity {:.2} < {:.2} — skipping verdict",
             best_sim, MIN_RELEVANCE,
         );
         fallback_verdict(
@@ -172,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
         )
     } else {
         let t_verdict = std::time::Instant::now();
-        eprintln!("🧠 Generating verdict via Ollama ({})…", args.model);
+        eprintln!("Generating verdict via Ollama ({})...", args.model);
         let ollama = patent::ollama::Ollama::new(patent::ollama::DEFAULT_ENDPOINT, &args.model);
         match patent::verdict::assess(&ollama, &query, &ranked, reached.clone(), failed.clone())
             .await
@@ -183,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Err(patent::Error::OllamaUnreachable(ref addr)) => {
                 eprintln!(
-                    "⚠  Ollama not reachable at {addr} — showing results without verdict.\n   \
+                    "warning: Ollama not reachable at {addr} — showing results without verdict.\n   \
                      Run `ollama serve` and `ollama pull {model}` to enable AI verdicts.",
                     model = args.model,
                 );
@@ -194,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Err(patent::Error::OllamaModel(ref why)) => {
                 eprintln!(
-                    "⚠  {why} — showing results without an AI verdict.\n   \
+                    "warning: {why} — showing results without an AI verdict.\n   \
                      Run `ollama pull {model}` to enable AI verdicts.",
                     model = args.model,
                 );
@@ -207,7 +221,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    eprintln!("⏱  total: {:.1}s", t_start.elapsed().as_secs_f64());
+    eprintln!("total: {:.1}s", t_start.elapsed().as_secs_f64());
 
     // ── Phase 4: output ─────────────────────────────────────────────────
     // The TUI needs a real terminal; when stdout is piped or redirected, fall
@@ -215,7 +229,9 @@ async fn main() -> anyhow::Result<()> {
     let want_json = args.json || !std::io::stdout().is_terminal();
     if want_json {
         if !args.json {
-            eprintln!("ℹ  stdout is not a terminal — emitting JSON (pass --json to silence this).");
+            eprintln!(
+                "note: stdout is not a terminal — emitting JSON (pass --json to silence this)."
+            );
         }
         let output = serde_json::json!({
             "query": idea,

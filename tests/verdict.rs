@@ -334,3 +334,50 @@ async fn assess_threads_failed_sources_into_verdict() {
 
     assert_eq!(v.sources_failed, vec![Source::PyPI, Source::CratesIo]);
 }
+
+// -- from_data() — the --fast / no-LLM path -----------------------------------
+
+#[test]
+fn from_data_floors_level_against_similarity() {
+    // Two matches at 0.85 and 0.60 => at least two >= 0.55 => Crowded, derived
+    // from the similarity data alone with no model in the loop. The no-LLM path
+    // must never under-rate a populated space into a green "Open".
+    let v = verdict::from_data(&sample_matches(), checked(), vec![]);
+    assert_eq!(v.level, Saturation::Crowded);
+    assert!(v.gaps.is_empty(), "no model => no gaps");
+    assert_eq!(v.caveat, CAVEAT);
+    assert_eq!(v.sources_checked, checked());
+}
+
+#[test]
+fn from_data_open_when_nothing_close() {
+    let v = verdict::from_data(&[], vec![Source::GitHub], vec![]);
+    assert_eq!(v.level, Saturation::Open);
+    assert_eq!(v.caveat, CAVEAT);
+}
+
+#[test]
+fn from_data_never_asserts_absence() {
+    // The integrity rule holds on the no-LLM path too: even with zero matches
+    // the headline must never claim the idea doesn't exist anywhere.
+    let v = verdict::from_data(&[], vec![Source::GitHub], vec![]);
+    let lower = v.headline.to_lowercase();
+    for phrase in [
+        "does not exist",
+        "no prior art",
+        "never been",
+        "unprecedented",
+    ] {
+        assert!(
+            !lower.contains(phrase),
+            "absence claim in fast headline: {:?}",
+            v.headline
+        );
+    }
+}
+
+#[test]
+fn from_data_threads_failed_sources() {
+    let v = verdict::from_data(&sample_matches(), checked(), vec![Source::PyPI]);
+    assert_eq!(v.sources_failed, vec![Source::PyPI]);
+}
