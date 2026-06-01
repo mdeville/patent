@@ -279,7 +279,7 @@ async fn github_sends_query_and_user_agent() {
 }
 
 #[tokio::test]
-async fn github_null_description_becomes_empty() {
+async fn github_null_description_is_filtered_out() {
     let server = MockServer::start().await;
     let body = json!({
         "total_count": 1,
@@ -295,7 +295,7 @@ async fn github_null_description_becomes_empty() {
         .await;
 
     let matches = github_for(&server).search(&query()).await.unwrap();
-    assert_eq!(matches[0].description, "");
+    assert!(matches.is_empty());
 }
 
 #[tokio::test]
@@ -588,7 +588,7 @@ async fn hn_maps_hits_into_matches() {
 }
 
 #[tokio::test]
-async fn hn_null_story_text_becomes_empty() {
+async fn hn_null_story_text_falls_back_to_title() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/search"))
@@ -597,7 +597,7 @@ async fn hn_null_story_text_becomes_empty() {
         .await;
 
     let matches = hn_for(&server).search(&query()).await.unwrap();
-    assert_eq!(matches[1].description, "");
+    assert_eq!(matches[1].description, "Async Rust explained");
     assert_eq!(matches[1].url, "https://news.ycombinator.com/item?id=67890");
     assert_eq!(matches[1].popularity, Some(88));
 }

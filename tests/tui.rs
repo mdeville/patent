@@ -87,14 +87,15 @@ fn scroll_down_increments_cursor() {
 }
 
 #[test]
-fn scroll_down_clamps_at_last_item() {
+fn scroll_down_wraps_to_first_item() {
     let v = verdict();
     let m = matches();
     let mut app = App::new("x", &v, &m);
-    for _ in 0..100 {
-        app.scroll_down();
-    }
-    assert_eq!(app.cursor(), 2); // 3 matches, max index is 2
+    app.scroll_down();
+    app.scroll_down();
+    assert_eq!(app.cursor(), 2);
+    app.scroll_down();
+    assert_eq!(app.cursor(), 0);
 }
 
 #[test]
@@ -109,12 +110,12 @@ fn scroll_up_decrements_cursor() {
 }
 
 #[test]
-fn scroll_up_clamps_at_zero() {
+fn scroll_up_wraps_to_last_item() {
     let v = verdict();
     let m = matches();
     let mut app = App::new("x", &v, &m);
     app.scroll_up();
-    assert_eq!(app.cursor(), 0);
+    assert_eq!(app.cursor(), 2);
 }
 
 #[test]
@@ -374,7 +375,7 @@ fn scroll_within_filtered_view_clamps_correctly() {
     app.scroll_down();
     assert_eq!(app.cursor(), 1);
     app.scroll_down();
-    assert_eq!(app.cursor(), 1); // clamped at last
+    assert_eq!(app.cursor(), 0); // wraps to first
 }
 
 // -- filter_pop widens visible set -------------------------------------------
@@ -405,6 +406,133 @@ fn single_match_scroll_stays_at_zero() {
     assert_eq!(app.cursor(), 0);
     app.scroll_up();
     assert_eq!(app.cursor(), 0);
+}
+
+// -- show more / expand ------------------------------------------------------
+
+fn many_matches(n: usize) -> Vec<Match> {
+    (0..n)
+        .map(|i| Match {
+            name: format!("tool-{i}"),
+            source: Source::Npm,
+            url: format!("https://example.com/{i}"),
+            description: format!("Tool number {i}"),
+            popularity: Some(1000 - i as u64),
+            similarity: 1.0 - (i as f32 * 0.01),
+        })
+        .collect()
+}
+
+#[test]
+fn default_page_size_limits_displayed_matches() {
+    let v = verdict();
+    let m = many_matches(50);
+    let app = App::new("x", &v, &m);
+    assert_eq!(app.displayed_matches().len(), patent::tui::DEFAULT_PAGE);
+    assert!(!app.is_expanded());
+}
+
+#[test]
+fn fewer_than_page_size_shows_all() {
+    let v = verdict();
+    let m = many_matches(5);
+    let app = App::new("x", &v, &m);
+    assert_eq!(app.displayed_matches().len(), 5);
+}
+
+#[test]
+fn toggle_expand_shows_all_matches() {
+    let v = verdict();
+    let m = many_matches(50);
+    let mut app = App::new("x", &v, &m);
+    app.toggle_expand();
+    assert!(app.is_expanded());
+    assert_eq!(app.displayed_matches().len(), 50);
+}
+
+#[test]
+fn toggle_expand_twice_collapses_back() {
+    let v = verdict();
+    let m = many_matches(50);
+    let mut app = App::new("x", &v, &m);
+    app.toggle_expand();
+    app.toggle_expand();
+    assert!(!app.is_expanded());
+    assert_eq!(app.displayed_matches().len(), patent::tui::DEFAULT_PAGE);
+}
+
+#[test]
+fn scroll_wraps_within_displayed_page() {
+    let v = verdict();
+    let m = many_matches(50);
+    let mut app = App::new("x", &v, &m);
+    for _ in 0..patent::tui::DEFAULT_PAGE {
+        app.scroll_down();
+    }
+    assert_eq!(app.cursor(), 0);
+}
+
+#[test]
+fn expand_then_scroll_wraps_around() {
+    let v = verdict();
+    let m = many_matches(50);
+    let mut app = App::new("x", &v, &m);
+    app.toggle_expand();
+    for _ in 0..50 {
+        app.scroll_down();
+    }
+    assert_eq!(app.cursor(), 0);
+}
+
+#[test]
+fn collapse_clamps_cursor_if_past_page() {
+    let v = verdict();
+    let m = many_matches(50);
+    let mut app = App::new("x", &v, &m);
+    app.toggle_expand();
+    for _ in 0..30 {
+        app.scroll_down();
+    }
+    assert_eq!(app.cursor(), 30);
+    app.toggle_expand(); // collapse — cursor must clamp
+    assert_eq!(app.cursor(), patent::tui::DEFAULT_PAGE - 1);
+}
+
+#[test]
+fn filter_applies_to_displayed_matches() {
+    let v = verdict();
+    let m = many_matches(50);
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('0'); // matches tool-0, tool-10, tool-20, tool-30, tool-40
+    let displayed = app.displayed_matches();
+    assert!(displayed.len() <= patent::tui::DEFAULT_PAGE);
+    assert!(displayed.iter().all(|m| m.name.contains('0')));
+}
+
+#[test]
+fn has_more_is_true_when_truncated() {
+    let v = verdict();
+    let m = many_matches(50);
+    let app = App::new("x", &v, &m);
+    assert!(app.has_more());
+}
+
+#[test]
+fn has_more_is_false_when_all_fit() {
+    let v = verdict();
+    let m = many_matches(5);
+    let app = App::new("x", &v, &m);
+    assert!(!app.has_more());
+}
+
+#[test]
+fn has_more_is_false_when_expanded() {
+    let v = verdict();
+    let m = many_matches(50);
+    let mut app = App::new("x", &v, &m);
+    app.toggle_expand();
+    assert!(!app.has_more());
 }
 
 // -- verdict accessors -------------------------------------------------------

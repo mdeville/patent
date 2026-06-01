@@ -19,10 +19,15 @@ pub struct Ollama {
 
 impl Ollama {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("failed to build HTTP client");
         Self {
             endpoint: endpoint.into(),
             model: model.into(),
-            client: reqwest::Client::new(),
+            client,
         }
     }
 
@@ -33,6 +38,10 @@ impl Ollama {
             "model": self.model,
             "prompt": prompt,
             "stream": false,
+            "options": {
+                "temperature": 0.0,
+                "num_predict": 512,
+            },
         });
 
         let response = self

@@ -5,6 +5,9 @@
 
 use crate::model::{Match, Verdict};
 
+/// How many matches to show before the user presses "show more".
+pub const DEFAULT_PAGE: usize = 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -19,6 +22,7 @@ pub struct App<'a> {
     filter: String,
     visible: Vec<usize>,
     mode: Mode,
+    expanded: bool,
     quit: bool,
 }
 
@@ -33,6 +37,7 @@ impl<'a> App<'a> {
             filter: String::new(),
             visible,
             mode: Mode::Normal,
+            expanded: false,
             quit: false,
         }
     }
@@ -61,6 +66,10 @@ impl<'a> App<'a> {
         self.quit
     }
 
+    pub fn is_expanded(&self) -> bool {
+        self.expanded
+    }
+
     pub fn quit(&mut self) {
         self.quit = true;
     }
@@ -69,19 +78,41 @@ impl<'a> App<'a> {
         self.visible.iter().map(|&i| &self.matches[i]).collect()
     }
 
-    pub fn visible_count(&self) -> usize {
-        self.visible.len()
+    /// The matches to render — respects page size unless expanded.
+    pub fn displayed_matches(&self) -> Vec<&Match> {
+        let limit = self.display_limit();
+        self.visible
+            .iter()
+            .take(limit)
+            .map(|&i| &self.matches[i])
+            .collect()
+    }
+
+    /// True when there are more matches beyond the current page.
+    pub fn has_more(&self) -> bool {
+        !self.expanded && self.visible.len() > DEFAULT_PAGE
+    }
+
+    pub fn toggle_expand(&mut self) {
+        self.expanded = !self.expanded;
+        self.clamp_cursor();
     }
 
     pub fn scroll_down(&mut self) {
-        let max = self.visible.len().saturating_sub(1);
+        let max = self.display_limit().saturating_sub(1);
         if self.cursor < max {
             self.cursor += 1;
+        } else {
+            self.cursor = 0;
         }
     }
 
     pub fn scroll_up(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
+        if self.cursor == 0 {
+            self.cursor = self.display_limit().saturating_sub(1);
+        } else {
+            self.cursor -= 1;
+        }
     }
 
     pub fn enter_filter(&mut self) {
@@ -113,9 +144,20 @@ impl<'a> App<'a> {
     }
 
     pub fn selected_url(&self) -> Option<&str> {
+        let limit = self.display_limit();
         self.visible
-            .get(self.cursor)
+            .iter()
+            .take(limit)
+            .nth(self.cursor)
             .map(|&i| self.matches[i].url.as_str())
+    }
+
+    fn display_limit(&self) -> usize {
+        if self.expanded {
+            self.visible.len()
+        } else {
+            self.visible.len().min(DEFAULT_PAGE)
+        }
     }
 
     fn recompute_visible(&mut self) {
@@ -137,10 +179,11 @@ impl<'a> App<'a> {
     }
 
     fn clamp_cursor(&mut self) {
-        if self.visible.is_empty() {
+        let limit = self.display_limit();
+        if limit == 0 {
             self.cursor = 0;
-        } else if self.cursor >= self.visible.len() {
-            self.cursor = self.visible.len() - 1;
+        } else if self.cursor >= limit {
+            self.cursor = limit - 1;
         }
     }
 }
