@@ -20,14 +20,59 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+/// Score each match against the query embedding, sort by similarity descending,
+/// and keep at most `limit`.
+fn score_sort_limit(
+    query_emb: &[f32],
+    mut matches: Vec<Match>,
+    match_embs: &[Vec<f32>],
+    limit: usize,
+) -> Vec<Match> {
+    for (m, emb) in matches.iter_mut().zip(match_embs) {
+        m.similarity = cosine(query_emb, emb);
+    }
+    matches.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    matches.truncate(limit);
+    matches
+}
+
 /// Embed the idea + descriptions, rank by cosine similarity, keep top `limit`.
-pub fn rank(_query: &Query, _matches: Vec<Match>, _limit: usize) -> crate::Result<Vec<Match>> {
-    todo!("M3: fastembed embed + cosine rank + top-N")
+pub fn rank(query: &Query, matches: Vec<Match>, limit: usize) -> crate::Result<Vec<Match>> {
+    if matches.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let model = fastembed::TextEmbedding::try_new(
+        fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
+            .with_show_download_progress(false),
+    )
+    .map_err(|e| crate::Error::Embedding(e.to_string()))?;
+
+    let query_embs = model
+        .embed(vec![query.idea.as_str()], None)
+        .map_err(|e| crate::Error::Embedding(e.to_string()))?;
+
+    let descriptions: Vec<&str> = matches.iter().map(|m| m.description.as_str()).collect();
+    let match_embs = model
+        .embed(descriptions, None)
+        .map_err(|e| crate::Error::Embedding(e.to_string()))?;
+
+    Ok(score_sort_limit(
+        &query_embs[0],
+        matches,
+        &match_embs,
+        limit,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Source;
 
     #[test]
     fn cosine_identical_is_one() {
@@ -43,5 +88,154 @@ mod tests {
     #[test]
     fn cosine_zero_vector_is_zero() {
         assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
+    }
+
+    fn test_match(name: &str, desc: &str) -> Match {
+        Match {
+            name: name.to_string(),
+            source: Source::CratesIo,
+            url: format!("https://example.com/{name}"),
+            description: desc.to_string(),
+            popularity: None,
+            similarity: 0.0,
+        }
+    }
+
+    // -- score_sort_limit tests (pure logic, no fastembed) --------------------
+
+    #[test]
+    fn ssl_empty_input() {
+        let result = score_sort_limit(&[1.0, 0.0], vec![], &[], 10);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn ssl_fills_similarity() {
+        let q = vec![1.0, 0.0, 0.0];
+        let matches = vec![test_match("a", "something")];
+        let embs = vec![vec![0.8, 0.1, 0.0]];
+        let result = score_sort_limit(&q, matches, &embs, 10);
+        assert!(result[0].similarity > 0.0);
+    }
+
+    #[test]
+    fn ssl_sorts_descending() {
+        let q = vec![1.0, 0.0];
+        let matches = vec![test_match("low", ""), test_match("high", "")];
+        let embs = vec![
+            vec![0.1, 0.9], // low similarity to [1, 0]
+            vec![0.9, 0.1], // high similarity to [1, 0]
+        ];
+        let result = score_sort_limit(&q, matches, &embs, 10);
+        assert_eq!(result[0].name, "high");
+        assert_eq!(result[1].name, "low");
+        assert!(result[0].similarity > result[1].similarity);
+    }
+
+    #[test]
+    fn ssl_truncates_to_limit() {
+        let q = vec![1.0, 0.0];
+        let matches = vec![
+            test_match("a", ""),
+            test_match("b", ""),
+            test_match("c", ""),
+        ];
+        let embs = vec![vec![1.0, 0.0], vec![0.5, 0.5], vec![0.0, 1.0]];
+        let result = score_sort_limit(&q, matches, &embs, 2);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn ssl_fewer_than_limit_returns_all() {
+        let q = vec![1.0, 0.0];
+        let matches = vec![test_match("only", "")];
+        let embs = vec![vec![1.0, 0.0]];
+        let result = score_sort_limit(&q, matches, &embs, 10);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn ssl_preserves_match_fields() {
+        let q = vec![1.0, 0.0];
+        let mut m = test_match("foo", "bar");
+        m.popularity = Some(42);
+        let embs = vec![vec![0.9, 0.1]];
+        let result = score_sort_limit(&q, vec![m], &embs, 10);
+        assert_eq!(result[0].name, "foo");
+        assert_eq!(result[0].description, "bar");
+        assert_eq!(result[0].popularity, Some(42));
+    }
+
+    // -- rank() end-to-end tests (need fastembed model) -----------------------
+
+    fn test_query() -> Query {
+        Query {
+            idea: "a fast async runtime for Rust".to_string(),
+            keywords: vec!["async".to_string(), "runtime".to_string()],
+        }
+    }
+
+    #[test]
+    fn rank_empty_matches_returns_empty() {
+        let result = rank(&test_query(), vec![], 10).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn rank_fills_positive_similarity_for_related_content() {
+        let matches = vec![test_match(
+            "tokio",
+            "An event-driven async runtime for Rust",
+        )];
+        let result = rank(&test_query(), matches, 10).unwrap();
+        assert!(
+            result[0].similarity > 0.0,
+            "related content must have positive similarity"
+        );
+    }
+
+    #[test]
+    fn rank_orders_relevant_above_irrelevant() {
+        let matches = vec![
+            test_match("recipes", "A collection of baking recipes and kitchen tips"),
+            test_match(
+                "tokio",
+                "An event-driven non-blocking I/O platform for async Rust",
+            ),
+        ];
+        let result = rank(&test_query(), matches, 10).unwrap();
+        assert_eq!(result[0].name, "tokio");
+    }
+
+    #[test]
+    fn rank_respects_limit() {
+        let matches = vec![
+            test_match("a", "async runtime alpha"),
+            test_match("b", "async runtime beta"),
+            test_match("c", "async runtime gamma"),
+            test_match("d", "async runtime delta"),
+        ];
+        let result = rank(&test_query(), matches, 2).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn rank_returns_sorted_descending() {
+        let matches = vec![
+            test_match("recipes", "Baking sourdough bread at home"),
+            test_match("smol", "A small async runtime"),
+            test_match("tokio", "An async runtime for Rust applications"),
+        ];
+        let result = rank(&test_query(), matches, 10).unwrap();
+        for pair in result.windows(2) {
+            assert!(
+                pair[0].similarity >= pair[1].similarity,
+                "{} ({}) should be >= {} ({})",
+                pair[0].name,
+                pair[0].similarity,
+                pair[1].name,
+                pair[1].similarity,
+            );
+        }
     }
 }
