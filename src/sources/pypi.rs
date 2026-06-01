@@ -54,13 +54,13 @@ impl SourceAdapter for PyPI {
             .text()
             .await?;
 
-        parse_search_html(&html)
+        parse_search_html(&html, &self.base_url)
     }
 }
 
 /// Parse a PyPI search results page into matches. A package with no name is
 /// skipped; a missing description becomes empty.
-fn parse_search_html(html: &str) -> Result<Vec<Match>> {
+fn parse_search_html(html: &str, base_url: &str) -> Result<Vec<Match>> {
     let snippet = Selector::parse("a.package-snippet")
         .map_err(|e| Error::Parse(format!("bad selector: {e}")))?;
     let name = Selector::parse(".package-snippet__name")
@@ -88,7 +88,11 @@ fn parse_search_html(html: &str) -> Result<Vec<Match>> {
             .unwrap_or_default();
 
         let href = element.value().attr("href").unwrap_or("");
-        let url = format!("{DEFAULT_BASE_URL}{href}");
+        let url = if href.starts_with("http") {
+            href.to_string()
+        } else {
+            format!("{base_url}{href}")
+        };
 
         matches.push(Match {
             name: name_text,

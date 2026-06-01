@@ -52,12 +52,15 @@ fn http_client() -> reqwest::Client {
 
 fn idea_contains(idea: &str, terms: &[&str]) -> bool {
     let lower = idea.to_lowercase();
+    let bytes = lower.as_bytes();
     terms.iter().any(|t| {
-        lower.find(t).is_some_and(|pos| {
-            let before = pos == 0 || !lower.as_bytes()[pos - 1].is_ascii_alphanumeric();
+        // Check EVERY occurrence, not just the first: a short keyword like "go"
+        // may first appear inside a larger word ("django") and then again as a
+        // standalone word — only the standalone one should count.
+        lower.match_indices(t).any(|(pos, _)| {
+            let before = pos == 0 || !bytes[pos - 1].is_ascii_alphanumeric();
             let after_pos = pos + t.len();
-            let after =
-                after_pos >= lower.len() || !lower.as_bytes()[after_pos].is_ascii_alphanumeric();
+            let after = after_pos >= bytes.len() || !bytes[after_pos].is_ascii_alphanumeric();
             before && after
         })
     })
@@ -70,8 +73,12 @@ fn add(set: &mut HashSet<S>, sources: &[S]) {
 fn detect_sources(idea: &str) -> HashSet<S> {
     let mut s = HashSet::new();
 
-    // GitHub is always included.
+    // GitHub and Hacker News are always included: GitHub is the cross-language
+    // home of source code, and Hacker News is the cross-language home of the
+    // "Show HN" launch / discussion that often predates a registry release.
+    // Both are language-agnostic, so they apply to every query.
     s.insert(S::GitHub);
+    s.insert(S::HackerNews);
 
     // ── Explicit language / ecosystem mentions ──────────────────────────
     if idea_contains(idea, &["rust", "crate", "cargo"]) {
@@ -89,7 +96,7 @@ fn detect_sources(idea: &str) -> HashSet<S> {
     ) {
         s.insert(S::PyPI);
     }
-    if idea_contains(idea, &["go ", "golang", "goroutine"]) {
+    if idea_contains(idea, &["go", "golang", "goroutine"]) {
         s.insert(S::Go);
     }
     if idea_contains(
@@ -112,7 +119,7 @@ fn detect_sources(idea: &str) -> HashSet<S> {
     if idea_contains(
         idea,
         &[
-            "ai ",
+            "ai",
             "llm",
             "machine learning",
             "deep learning",
@@ -128,8 +135,12 @@ fn detect_sources(idea: &str) -> HashSet<S> {
     ) {
         add(&mut s, &[S::PyPI, S::Npm]);
     }
+    // CLI tools span every ecosystem, so a generic "cli" mention casts the net
+    // across the dominant registries rather than just Rust/Go — otherwise the
+    // flagship "kill the process on a port" demo would never search npm, where
+    // fkill-cli / kill-port actually live.
     if idea_contains(idea, &["cli", "command line", "terminal tool", "shell"]) {
-        add(&mut s, &[S::CratesIo, S::Go]);
+        add(&mut s, &[S::CratesIo, S::Go, S::Npm, S::PyPI]);
     }
     if idea_contains(
         idea,
@@ -211,8 +222,10 @@ fn detect_sources(idea: &str) -> HashSet<S> {
     }
 
     // ── Fallback: no signal at all → broad sweep ────────────────────────
-    // GitHub alone isn't enough; add the 3 biggest registries.
-    if s.len() <= 1 {
+    // The always-on GitHub + Hacker News aren't enough on their own; if no
+    // language/domain branch matched, add the 3 biggest registries.
+    const ALWAYS_ON: usize = 2; // GitHub + Hacker News
+    if s.len() <= ALWAYS_ON {
         add(&mut s, &[S::Npm, S::PyPI, S::CratesIo]);
     }
 
@@ -244,19 +257,24 @@ fn sources_for(query: &Query) -> Vec<Box<dyn SourceAdapter>> {
         .collect()
 }
 
+/// The outcome of a fan-out: deduped matches, the sources that responded, and
+/// the selected sources that failed (so reduced coverage can be surfaced).
+pub struct SearchOutcome {
+    pub matches: Vec<Match>,
+    pub reached: Vec<crate::model::Source>,
+    pub failed: Vec<crate::model::Source>,
+}
+
 /// Fan out to selected sources concurrently, dropping the ones that fail.
-/// Returns the deduped matches and which sources were reached.
-pub async fn search_all(query: &Query) -> (Vec<Match>, Vec<crate::model::Source>) {
+pub async fn search_all(query: &Query) -> SearchOutcome {
     search_sources(&sources_for(query), query).await
 }
 
 /// Run `query` against `sources` concurrently, skipping any that error, and
-/// dedup the combined results. Returns the deduped matches and which sources
-/// responded successfully. Exposed for testing the fan-out in isolation.
-pub async fn search_sources(
-    sources: &[Box<dyn SourceAdapter>],
-    query: &Query,
-) -> (Vec<Match>, Vec<crate::model::Source>) {
+/// dedup the combined results. Returns the deduped matches, which sources
+/// responded successfully, and which were attempted but failed. Exposed for
+/// testing the fan-out in isolation.
+pub async fn search_sources(sources: &[Box<dyn SourceAdapter>], query: &Query) -> SearchOutcome {
     let results = join_all(sources.iter().map(|s| {
         let id = s.id();
         async move {
@@ -280,14 +298,16 @@ pub async fn search_sources(
                 all.extend(matches);
             }
             Err(e) => {
-                failed.push((id, e));
+                eprintln!("⚠  {id} not reached: {e}");
+                failed.push(id);
             }
         }
     }
-    for (id, err) in &failed {
-        eprintln!("⚠  {id} failed: {err}");
+    SearchOutcome {
+        matches: dedup(all),
+        reached,
+        failed,
     }
-    (dedup(all), reached)
 }
 
 /// Remove duplicate matches by URL, keeping the first occurrence and preserving
@@ -298,4 +318,125 @@ pub fn dedup(matches: Vec<Match>) -> Vec<Match> {
         .into_iter()
         .filter(|m| seen.insert(m.url.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idea_contains_respects_word_boundaries() {
+        assert!(idea_contains("a fast async runtime", &["async"]));
+        // Substrings inside larger words must not match.
+        assert!(!idea_contains("rainbow trains", &["ai"]));
+        assert!(!idea_contains("googol", &["go"]));
+        assert!(!idea_contains("django framework", &["go"]));
+    }
+
+    #[test]
+    fn idea_contains_checks_all_occurrences_not_just_the_first() {
+        // A non-boundary substring earlier in the string must not mask a later
+        // standalone occurrence of the keyword.
+        assert!(idea_contains(
+            "a tool for cargo packages written in go",
+            &["go"]
+        ));
+        assert!(idea_contains("email summarizer that uses ai", &["ai"]));
+        assert!(idea_contains("a good way to go fast", &["go"]));
+    }
+
+    #[test]
+    fn github_and_hacker_news_are_always_selected() {
+        // Whatever the idea, the two language-agnostic indexes are present so
+        // they are never falsely advertised but unreachable.
+        for idea in ["a ruby gem for parsing csv", "asdf qwer zxcv", "rust crate"] {
+            let s = detect_sources(idea);
+            assert!(s.contains(&S::GitHub), "GitHub missing for {idea:?}");
+            assert!(
+                s.contains(&S::HackerNews),
+                "Hacker News missing for {idea:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_built_source_is_reachable_from_some_idea() {
+        // Guards against re-introducing a "marketed but never selected" source:
+        // each variant build_source can construct must be selectable.
+        let ideas = [
+            "rust crate for embedded firmware",
+            "a python pandas data pipeline",
+            "a typescript react frontend component",
+            "a golang microservice",
+            "a java spring boot service",
+            "a ruby on rails gem",
+            "a c# dotnet unity game",
+            "a docker container for kubernetes",
+            "a vscode extension for editors",
+            "anything at all with no signal",
+        ];
+        let mut seen: HashSet<S> = HashSet::new();
+        for idea in ideas {
+            seen.extend(detect_sources(idea));
+        }
+        for variant in [
+            S::CratesIo,
+            S::GitHub,
+            S::Npm,
+            S::PyPI,
+            S::HackerNews,
+            S::Go,
+            S::Maven,
+            S::RubyGems,
+            S::DockerHub,
+            S::VsCodeMarketplace,
+            S::NuGet,
+        ] {
+            assert!(
+                seen.contains(&variant),
+                "{variant} is built but never selected by detect_sources"
+            );
+        }
+    }
+
+    #[test]
+    fn language_mentions_select_their_registry() {
+        assert!(detect_sources("a rust crate for parsing").contains(&S::CratesIo));
+        assert!(detect_sources("a python library for parsing").contains(&S::PyPI));
+        assert!(detect_sources("a docker image for caching").contains(&S::DockerHub));
+        assert!(detect_sources("a ruby gem for parsing").contains(&S::RubyGems));
+    }
+
+    #[test]
+    fn go_and_ai_match_natural_phrasings() {
+        // Regression: trailing-space keywords ("go ", "ai ") used to be
+        // impossible to match. These phrasings deliberately avoid the "cli"
+        // branch (which would add Go on its own) so they isolate the keyword.
+        assert!(detect_sources("a fast Go library for parsing json").contains(&S::Go));
+        assert!(detect_sources("a library that uses AI to summarize text").contains(&S::PyPI));
+        // And the keyword must still win when a non-boundary substring precedes
+        // the standalone word (the first-occurrence regression).
+        assert!(detect_sources("a cargo workspace tool also written in go").contains(&S::Go));
+    }
+
+    #[test]
+    fn port_killer_demo_searches_npm() {
+        // The flagship README example must reach npm, where fkill-cli /
+        // kill-port live — otherwise the headline demo finds no prior art.
+        for idea in [
+            "interactive cli to kill whatever's on a port",
+            "CLI tool that kills whatever's on a port",
+        ] {
+            let s = detect_sources(idea);
+            assert!(s.contains(&S::Npm), "npm missing for {idea:?}: {s:?}");
+        }
+    }
+
+    #[test]
+    fn no_signal_falls_back_to_broad_sweep() {
+        let s = detect_sources("asdf qwer zxcv hjkl");
+        assert!(s.contains(&S::Npm));
+        assert!(s.contains(&S::PyPI));
+        assert!(s.contains(&S::CratesIo));
+    }
 }

@@ -2321,6 +2321,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm 0.29.0",
+ "dirs",
  "fastembed",
  "futures",
  "open",

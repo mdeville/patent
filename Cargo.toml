@@ -6,10 +6,20 @@ rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 description = "A prior-art search for your code ideas — has this dev tool already been shipped?"
 repository = "https://github.com/r14dd/patent"
+homepage = "https://github.com/r14dd/patent"
+documentation = "https://docs.rs/patent"
+authors = ["Riad Mukhtarov"]
 readme = "README.md"
 keywords = ["search", "cli", "prior-art", "semantic-search", "dev-tools"]
 categories = ["command-line-utilities"]
-exclude = [".github/", ".claude/"]
+exclude = [
+    ".github/",
+    ".claude/",
+    "CLAUDE.md",
+    "clippy.toml",
+    "rustfmt.toml",
+    ".plan-source.md",
+]
 
 [lib]
 name = "patent"
@@ -38,6 +48,9 @@ scraper = "0.27"
 # Errors
 anyhow = "1"
 thiserror = "2"
+
+# Stable per-user cache dir for the embedding model
+dirs = "6"
 
 # Ranking (M3) — semantic embeddings, model downloads on first run
 fastembed = "5"

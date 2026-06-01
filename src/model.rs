@@ -64,7 +64,11 @@ pub struct Match {
 }
 
 /// How crowded the space looks, based on what was found in the sources checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Ordered `Open < Crowded < Saturated` so the verdict level can be *floored*
+/// against the similarity data (the model is never allowed to under-rate a
+/// space that the embeddings show is clearly populated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Saturation {
     /// 🟢 nothing close found in the sources checked.
     Open,
@@ -93,6 +97,12 @@ pub struct Verdict {
     pub level: Saturation,
     pub headline: String,
     pub gaps: Vec<String>,
+    /// Sources that were searched successfully — always surfaced for transparency.
     pub sources_checked: Vec<Source>,
+    /// Sources that were selected but failed to respond (e.g. network error or
+    /// rate limit). Surfaced so a thin or empty result isn't mistaken for
+    /// "nothing out there" when coverage was actually reduced.
+    #[serde(default)]
+    pub sources_failed: Vec<Source>,
     pub caveat: String,
 }

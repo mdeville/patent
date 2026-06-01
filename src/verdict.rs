@@ -12,15 +12,32 @@ use crate::ollama::Ollama;
 pub const CAVEAT: &str = "Not proof it doesn't exist — only that nothing close turned up \
 in the sources checked. Keep looking (web, app stores, niche communities) before committing.";
 
+/// Render the list of sources actually searched, for the prompt.
+fn source_list(sources_checked: &[Source]) -> String {
+    if sources_checked.is_empty() {
+        return "the selected open-source registries".to_string();
+    }
+    sources_checked
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Build the Ollama prompt enforcing the integrity rules.
-pub fn build_prompt(query: &Query, matches: &[Match]) -> String {
+///
+/// `sources_checked` must be the sources that actually responded — the prompt
+/// only ever tells the model about coverage that really happened, so the model
+/// can't be steered into claiming a source was searched when it wasn't.
+pub fn build_prompt(query: &Query, matches: &[Match], sources_checked: &[Source]) -> String {
     let mut prompt = String::new();
 
-    prompt.push_str(
+    prompt.push_str(&format!(
         "You are a prior-art analyst for SOFTWARE DEVELOPER TOOLS ONLY. The user has an \
-         idea for a dev tool and we searched open-source registries (crates.io, npm, PyPI, \
-         GitHub, Hacker News) for existing implementations.\n\n",
-    );
+         idea for a dev tool and we searched these open-source sources for existing \
+         implementations: {}.\n\n",
+        source_list(sources_checked),
+    ));
 
     prompt.push_str(&format!("## Idea\n{}\n\n", query.idea));
 
@@ -85,10 +102,113 @@ pub fn build_prompt(query: &Query, matches: &[Match]) -> String {
            \"headline\": \"one-sentence summary scoped to sources checked\",\n  \
            \"gaps\": [\"gap the user could fill\", ...]\n\
          }\n\
-         ```\n",
+         ```\n\
+         The headline MUST describe the user's idea and its closest matches above \
+         — never an unrelated tool from the list — and must be scoped to the \
+         sources checked. Never claim the idea does not exist or has no prior art.\n",
     );
 
     prompt
+}
+
+/// Phrases that assert non-existence. The integrity rule forbids ever telling a
+/// user their idea doesn't exist (we only searched some sources), so if the
+/// model emits one of these despite the prompt, we replace the text.
+///
+/// This is a deliberately broad, conservative backstop: a false positive only
+/// downgrades the copy to a safe scoped headline, whereas a false negative is
+/// an integrity violation — so we err toward catching more.
+const ABSENCE_PHRASES: &[&str] = &[
+    "does not exist",
+    "doesn't exist",
+    "do not exist",
+    "don't exist",
+    "no prior art",
+    "nothing exists",
+    "nothing like this",
+    "never been built",
+    "never been made",
+    "never been implemented",
+    "has not been built",
+    "hasn't been built",
+    "has not been implemented",
+    "hasn't been implemented",
+    "not been implemented",
+    "no one has built",
+    "no one has made",
+    "no one else",
+    "nobody else",
+    "no one is doing",
+    "no such tool",
+    "no existing tool",
+    "no existing solution",
+    "no existing implementation",
+    "no similar tool",
+    "no similar project",
+    "no comparable",
+    "no competitors",
+    "no alternatives",
+    "no equivalent",
+    "there is no tool",
+    "there are no tools",
+    "there is no existing",
+    "there is no software",
+    "there is no prior",
+    "completely novel",
+    "entirely new",
+    "brand new concept",
+    "first of its kind",
+    "unprecedented",
+];
+
+/// True if `text` asserts that something does not exist.
+fn contains_absence_phrase(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    ABSENCE_PHRASES.iter().any(|p| lower.contains(p))
+}
+
+/// A safe, scoped headline derived purely from the data — never asserts absence.
+fn data_headline(level: Saturation, matches: &[Match]) -> String {
+    let close = matches.iter().filter(|m| m.similarity >= 0.55).count();
+    match level {
+        Saturation::Saturated => {
+            format!("Saturated — {close} closely-related tools turned up in the sources checked.")
+        }
+        Saturation::Crowded => format!(
+            "Crowded — {close} closely-related tool{} turned up in the sources checked.",
+            if close == 1 { "" } else { "s" }
+        ),
+        Saturation::Open => {
+            "Nothing close turned up in the sources checked — keep looking before committing."
+                .to_string()
+        }
+    }
+}
+
+/// Replace any headline that asserts non-existence with a safe scoped one. This
+/// is the code-level guarantee behind the integrity rule; the prompt asks the
+/// model to comply, but we never *rely* on it.
+fn guard_headline(headline: String, level: Saturation, matches: &[Match]) -> String {
+    if contains_absence_phrase(&headline) {
+        data_headline(level, matches)
+    } else {
+        headline
+    }
+}
+
+/// Floor the model's level against the similarity data so it can never hand out
+/// a green-light "Open" when the embeddings clearly show close prior art.
+fn floor_level(model_level: Saturation, matches: &[Match]) -> Saturation {
+    let strong = matches.iter().filter(|m| m.similarity >= 0.60).count();
+    let close = matches.iter().filter(|m| m.similarity >= 0.55).count();
+    let data_level = if strong >= 5 {
+        Saturation::Saturated
+    } else if close >= 2 {
+        Saturation::Crowded
+    } else {
+        Saturation::Open
+    };
+    model_level.max(data_level)
 }
 
 /// Extract JSON from a model response that may be wrapped in markdown fences.
@@ -107,38 +227,59 @@ fn extract_json(raw: &str) -> &str {
     trimmed
 }
 
-/// Parse the model's JSON response into the verdict fields we need.
-fn parse_verdict(raw: &str, sources_checked: Vec<Source>) -> crate::Result<Verdict> {
+/// Parse the model's JSON response into the verdict fields we need, then apply
+/// the two integrity guards: floor the level against the similarity data, and
+/// replace any headline that asserts non-existence.
+fn parse_verdict(
+    raw: &str,
+    matches: &[Match],
+    sources_checked: Vec<Source>,
+    sources_failed: Vec<Source>,
+) -> crate::Result<Verdict> {
     let json_str = extract_json(raw);
 
     let v: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| crate::Error::Parse(e.to_string()))?;
 
-    let level = match v["level"].as_str() {
+    let model_level = match v["level"].as_str() {
         Some("Open") => Saturation::Open,
         Some("Crowded") => Saturation::Crowded,
         Some("Saturated") => Saturation::Saturated,
         other => return Err(crate::Error::Parse(format!("invalid level: {:?}", other))),
     };
 
-    let headline = v["headline"]
+    let raw_headline = v["headline"]
         .as_str()
         .ok_or_else(|| crate::Error::Parse("missing 'headline'".into()))?
         .to_string();
 
-    let gaps = match v["gaps"].as_array() {
+    // Gaps render verbatim, so they get the same absence-claim guard as the
+    // headline: a gap that asserts non-existence is dropped rather than shown.
+    let gaps: Vec<String> = match v["gaps"].as_array() {
         Some(arr) => arr
             .iter()
             .filter_map(|g| g.as_str().map(String::from))
+            .filter(|g| !contains_absence_phrase(g))
             .collect(),
         None => vec![],
     };
+
+    // Floor the level against the data. If that raises it, the model misjudged
+    // the space, so we don't trust its headline either — derive a safe one.
+    let level = floor_level(model_level, matches);
+    let headline = if level != model_level {
+        data_headline(level, matches)
+    } else {
+        raw_headline
+    };
+    let headline = guard_headline(headline, level, matches);
 
     Ok(Verdict {
         level,
         headline,
         gaps,
         sources_checked,
+        sources_failed,
         caveat: CAVEAT.to_string(),
     })
 }
@@ -149,8 +290,9 @@ pub async fn assess(
     query: &Query,
     matches: &[Match],
     sources_checked: Vec<Source>,
+    sources_failed: Vec<Source>,
 ) -> crate::Result<Verdict> {
-    let prompt = build_prompt(query, matches);
+    let prompt = build_prompt(query, matches, &sources_checked);
     let raw = ollama.generate(&prompt).await?;
-    parse_verdict(&raw, sources_checked)
+    parse_verdict(&raw, matches, sources_checked, sources_failed)
 }

@@ -83,3 +83,29 @@ async fn generate_maps_server_error_to_parse() {
         "expected Parse, got: {err:?}"
     );
 }
+
+#[tokio::test]
+async fn generate_maps_model_not_found_to_ollama_model_error() {
+    // Ollama is reachable but the model isn't pulled: it returns 404 with an
+    // {"error": ...} body. This must be a recoverable OllamaModel error (so the
+    // run degrades gracefully) — not a fatal Parse error.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(
+                json!({ "error": "model 'qwen2.5' not found, try pulling it first" }),
+            ),
+        )
+        .mount(&server)
+        .await;
+
+    let err = ollama_for(&server, "qwen2.5")
+        .generate("hi")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, patent::Error::OllamaModel(_)),
+        "expected OllamaModel, got: {err:?}"
+    );
+}
