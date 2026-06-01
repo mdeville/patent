@@ -1,38 +1,83 @@
 # patent
 
-**A prior-art search for your code ideas.**
+**A prior-art search for your code ideas.** Stop building what already exists —
+find the state of the art in seconds, without leaving the terminal.
+
+[![crates.io](https://img.shields.io/crates/v/patent.svg)](https://crates.io/crates/patent)
+[![docs.rs](https://docs.rs/patent/badge.svg)](https://docs.rs/patent)
+[![CI](https://github.com/r14dd/patent/actions/workflows/ci.yml/badge.svg)](https://github.com/r14dd/patent/actions/workflows/ci.yml)
+[![license: MIT OR Apache-2.0](https://img.shields.io/crates/l/patent.svg)](#license)
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/r14dd/patent/main/demo.gif" alt="patent in action" width="720">
+</p>
 
 Give `patent` a plain-English dev-tool idea and it searches 11 open-source
-registries for existing implementations, ranks them with local semantic search,
-and writes an honest verdict — all without leaving the terminal.
+registries — crates.io, npm, PyPI, GitHub, Docker Hub, and more — ranks the
+matches with local semantic search, and writes an honest verdict on whether the
+space is **Open**, **Crowded**, or **Saturated**. Everything runs on your
+machine.
 
+```bash
+cargo install patent
 ```
+
+```bash
 patent "interactive cli to kill whatever's on a port"
 ```
 
 > Like a patent search, but for code. A patent search *finds prior art* — it
 > never certifies absence. Neither does this.
 
+## Why
+
+- **Prevent wasted effort** — find out something already exists *before* you
+  spend a month rebuilding it.
+- **Find inspiration & benchmarks** — see the closest prior art, ranked, so you
+  know exactly what you'd have to beat.
+- **Competitive analysis** — survey an entire ecosystem in one command instead
+  of tab-hopping across a dozen registries.
+
+## Quick demo
+
+```bash
+# A crowded space — lots of prior art, ranked by relevance
+patent "distributed key-value store in rust"
+
+# Pipe structured output into your own tooling
+patent "react component for infinite scroll" --json | jq .
+
+# Skip the AI verdict for an instant, search-only result
+patent "kubernetes log viewer" --fast
+```
+
 ## Features
 
-- **11 sources** — crates.io, npm, PyPI, GitHub, Go, Maven, NuGet, RubyGems,
-  Docker Hub, VS Code Marketplace, Hacker News
-- **Smart source selection** — mentions "rust" and it searches crates.io;
-  mentions "docker" and it hits Docker Hub. GitHub and Hacker News (both
-  language-agnostic) are always searched; with no language signal it falls back
-  to a broad sweep across the largest registries.
-- **Semantic ranking** — local embeddings (AllMiniLM-L6-V2 via
-  [fastembed](https://crates.io/crates/fastembed)) rank matches by cosine
-  similarity to your idea
-- **AI verdict** — a local [Ollama](https://ollama.com) model classifies the
-  space as Open / Crowded / Saturated and identifies gaps
-- **Interactive TUI** — scrollable matches, filtering, one-key URL opening,
-  help overlay
-- **JSON output** — `--json` for scripting and CI pipelines
-- **Fully local** — no data leaves your machine; embeddings and LLM run locally
-- **Graceful degradation** — Ollama down, or the model not pulled? Results
-  still render, ranked by similarity, without an AI verdict. A source fails?
-  It's skipped (and shown as "not reached"), never fatal.
+- **Search the entire developer ecosystem at once** — 11 registries (crates.io,
+  npm, PyPI, GitHub, Go, Maven, NuGet, RubyGems, Docker Hub, VS Code
+  Marketplace, Hacker News) in a single command.
+- **It searches the right places automatically** — mention "rust" and it hits
+  crates.io; mention "docker" and it hits Docker Hub. GitHub and Hacker News
+  (both language-agnostic) are always searched; with no language signal it falls
+  back to a broad sweep across the largest registries.
+- **Relevance you can trust** — local embeddings (AllMiniLM-L6-V2 via
+  [fastembed](https://crates.io/crates/fastembed)) rank every match by cosine
+  similarity to your idea, so the closest prior art floats to the top.
+- **An honest verdict, not hype** — a local [Ollama](https://ollama.com) model
+  classifies the space as Open / Crowded / Saturated and names the gaps you
+  could fill. It can prove something *exists*; it never claims something
+  *doesn't*.
+- **Instant mode** — `--fast` skips the LLM and gives you the ranked list
+  immediately, with a saturation level derived straight from the similarity
+  data.
+- **See it, don't parse it** — an interactive TUI with scrollable, filterable,
+  sortable matches, a detail popup for any result, mouse support, and one-key
+  URL opening. Need machine output? `--json`.
+- **Fully local & private** — no data leaves your machine; embeddings and the
+  LLM both run locally.
+- **Never fails loud** — Ollama down, or the model not pulled? Results still
+  render, ranked by similarity, without an AI verdict. A source fails? It's
+  skipped (and shown as "not reached"), never fatal.
 
 ## Install
 
@@ -54,7 +99,8 @@ cargo install --path .
 
 **Rust** (stable 1.80+) via [rustup](https://rustup.rs).
 
-**Ollama** (optional, recommended) — powers the AI verdict:
+**Ollama** (optional, recommended) — powers the AI verdict. Skip it and use
+`--fast`, or just let `patent` fall back to a similarity-only verdict:
 
 ```bash
 # macOS
@@ -63,31 +109,41 @@ brew install ollama
 # Linux
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Then:
+# Windows (or download the installer from https://ollama.com/download)
+winget install Ollama.Ollama
+
+# Then (any platform):
 ollama pull qwen2.5
 ollama serve
 ```
-
-Without Ollama, `patent` still searches and ranks — you just won't get the
-AI-generated verdict.
 
 **GitHub token** (optional) — the unauthenticated GitHub search API is limited
 to 10 requests/minute. Set a token to raise that to 30 requests/minute (3×):
 
 ```bash
+# macOS / Linux
 export GITHUB_TOKEN=ghp_your_token_here
 ```
 
+```powershell
+# Windows (PowerShell)
+$env:GITHUB_TOKEN = "ghp_your_token_here"
+```
+
 **First run** — `patent` downloads a small (~80 MB) embedding model the first
-time it ranks results. It's cached under your OS cache directory (e.g.
-`~/Library/Caches/patent` on macOS, `~/.cache/patent` on Linux), so it's a
-one-time download shared across every directory you run from.
+time it ranks results. You'll see a one-time `downloading the embedding model…`
+notice. It's cached under your OS cache directory (e.g. `~/Library/Caches/patent`
+on macOS, `~/.cache/patent` on Linux, `%LOCALAPPDATA%\patent` on Windows), so
+it's a one-time download shared across every directory you run from.
 
 ## Usage
 
 ```bash
 # Basic search — opens the interactive TUI
 patent "CLI tool that kills whatever's on a port"
+
+# Instant, search-only result — no model warm-up, no inference wait
+patent "CLI tool that kills whatever's on a port" --fast
 
 # Structured JSON output for scripting
 patent "react component for infinite scroll" --json | jq .
@@ -103,6 +159,7 @@ patent "async runtime for rust" --limit 100
 
 | Flag | Description | Default |
 |---|---|---|
+| `--fast` | Skip the Ollama verdict for an instant, search-only result | — |
 | `--json` | Print JSON to stdout instead of the TUI | — |
 | `--model <MODEL>` | Ollama model for the verdict | `qwen2.5` |
 | `--limit <N>` | Max matches to keep after ranking | `50` |
@@ -133,12 +190,15 @@ patent --completions powershell >> $PROFILE
 | `g` / `Home` | Jump to top |
 | `G` / `End` | Jump to bottom |
 | `/` | Filter matches |
+| `s` | Cycle sort (similarity / popularity / name) |
 | `m` | Show more / show less |
-| `Enter` | Open selected match in browser |
+| `Enter` | Show match details (full description, popularity, URL) |
+| `o` | Open selected match in browser |
 | `?` | Help overlay |
 | `q` | Quit |
 
-Press `?` inside the TUI for the full keybinding reference.
+The mouse works too — scroll with the wheel, click a row to select it. Press
+`?` inside the TUI for the full keybinding reference.
 
 ## How it works
 
@@ -166,7 +226,8 @@ idea ──► parse keywords
 3. **Rank** — embeds the idea and each match description with AllMiniLM-L6-V2,
    sorts by cosine similarity, keeps the top N
 4. **Verdict** — sends the ranked matches to a local Ollama model that
-   classifies the space and identifies gaps
+   classifies the space and identifies gaps (or, with `--fast`, derives the
+   level straight from the similarity data)
 5. **Output** — interactive TUI (default) or structured JSON (`--json`)
 
 The embedding model loads concurrently with source searches, so the model-load
@@ -179,7 +240,9 @@ latency is hidden behind network I/O.
 found in the sources checked," and a clean result means *keep looking*, not
 *start building*.
 
-The sources-checked list is always displayed for transparency.
+The sources-checked list is always displayed for transparency, and sources that
+were selected but failed to respond are surfaced as "not reached" — so a thin
+result is never mistaken for "nothing out there."
 
 ## Architecture
 
@@ -220,6 +283,12 @@ cargo fmt --all --check       # formatting (CI-enforced)
 cargo clippy --all-targets -- -D warnings  # lint (CI-enforced)
 cargo test                    # unit + wiremock integration tests
 cargo build --release         # optimized build
+```
+
+The README demo GIF is generated with [vhs](https://github.com/charmbracelet/vhs):
+
+```bash
+vhs demo.tape                 # writes demo.gif
 ```
 
 ### Adding a new source

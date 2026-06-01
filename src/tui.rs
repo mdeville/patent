@@ -13,6 +13,38 @@ pub enum Mode {
     Normal,
     Filter,
     Help,
+    /// Full-screen-ish popup with the selected match's untruncated details.
+    Detail,
+}
+
+/// How the matches list is ordered. Cycled with `s` in the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortKey {
+    /// Cosine similarity to the idea — the ranker's order, and the default.
+    Similarity,
+    /// Source popularity signal (stars, downloads…), most first.
+    Popularity,
+    /// Match name, A→Z (case-insensitive).
+    Name,
+}
+
+impl SortKey {
+    /// Short label shown in the matches-table title.
+    pub fn label(self) -> &'static str {
+        match self {
+            SortKey::Similarity => "similarity",
+            SortKey::Popularity => "popularity",
+            SortKey::Name => "name",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            SortKey::Similarity => SortKey::Popularity,
+            SortKey::Popularity => SortKey::Name,
+            SortKey::Name => SortKey::Similarity,
+        }
+    }
 }
 
 pub struct App<'a> {
@@ -25,12 +57,13 @@ pub struct App<'a> {
     mode: Mode,
     expanded: bool,
     quit: bool,
+    sort: SortKey,
 }
 
 impl<'a> App<'a> {
     pub fn new(idea: &'a str, verdict: &'a Verdict, matches: &'a [Match]) -> Self {
         let visible = (0..matches.len()).collect();
-        Self {
+        let mut app = Self {
             idea,
             verdict,
             matches,
@@ -40,7 +73,10 @@ impl<'a> App<'a> {
             mode: Mode::Normal,
             expanded: false,
             quit: false,
-        }
+            sort: SortKey::Similarity,
+        };
+        app.apply_sort();
+        app
     }
 
     pub fn idea(&self) -> &str {
@@ -164,13 +200,53 @@ impl<'a> App<'a> {
         self.clamp_cursor();
     }
 
-    pub fn selected_url(&self) -> Option<&str> {
+    /// The match under the cursor within the displayed page, if any.
+    pub fn selected_match(&self) -> Option<&Match> {
         let limit = self.display_limit();
         self.visible
             .iter()
             .take(limit)
             .nth(self.cursor)
-            .map(|&i| self.matches[i].url.as_str())
+            .map(|&i| &self.matches[i])
+    }
+
+    /// URL of the selected match, if any.
+    pub fn selected_url(&self) -> Option<&str> {
+        self.selected_match().map(|m| m.url.as_str())
+    }
+
+    /// Select a row by its position within the displayed page (used by mouse
+    /// clicks). Clamped to the visible range; a no-op when nothing is shown.
+    pub fn select_row(&mut self, row: usize) {
+        let limit = self.display_limit();
+        if limit == 0 {
+            return;
+        }
+        self.cursor = row.min(limit - 1);
+    }
+
+    /// Open the detail popup for the selected match (no-op if none selected).
+    pub fn enter_detail(&mut self) {
+        if self.selected_match().is_some() {
+            self.mode = Mode::Detail;
+        }
+    }
+
+    /// Close the detail popup, returning to the list.
+    pub fn exit_detail(&mut self) {
+        self.mode = Mode::Normal;
+    }
+
+    /// The current match sort order.
+    pub fn sort(&self) -> SortKey {
+        self.sort
+    }
+
+    /// Advance to the next sort order, re-sort, and jump back to the top.
+    pub fn cycle_sort(&mut self) {
+        self.sort = self.sort.next();
+        self.apply_sort();
+        self.cursor = 0;
     }
 
     fn display_limit(&self) -> usize {
@@ -196,6 +272,30 @@ impl<'a> App<'a> {
                 })
                 .map(|(i, _)| i)
                 .collect();
+        }
+        self.apply_sort();
+    }
+
+    /// Order `visible` by the current [`SortKey`]. Stable, so equal keys keep
+    /// their prior (similarity-ranked) order.
+    fn apply_sort(&mut self) {
+        let matches = self.matches;
+        match self.sort {
+            SortKey::Similarity => self.visible.sort_by(|&a, &b| {
+                matches[b]
+                    .similarity
+                    .partial_cmp(&matches[a].similarity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortKey::Popularity => self
+                .visible
+                .sort_by(|&a, &b| matches[b].popularity.cmp(&matches[a].popularity)),
+            SortKey::Name => self.visible.sort_by(|&a, &b| {
+                matches[a]
+                    .name
+                    .to_lowercase()
+                    .cmp(&matches[b].name.to_lowercase())
+            }),
         }
     }
 

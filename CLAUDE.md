@@ -32,7 +32,10 @@ This is the product's whole point — do not soften it:
   *floors* the level against the similarity data and *scrubs* any headline that
   asserts non-existence (`guard_headline` / `floor_level`).
 - The fixed humble caveat (`verdict::CAVEAT`) appears on every verdict path
-  (Ollama success, Ollama unreachable, model-not-pulled, and low-relevance).
+  (Ollama success, Ollama unreachable, model-not-pulled, low-relevance, and
+  `--fast`). The `--fast` path (`verdict::from_data`) skips Ollama entirely and
+  derives the level by *flooring* against the similarity data — so even a no-LLM
+  run never hands out a green "Open" over a populated space.
 
 ## Commands
 

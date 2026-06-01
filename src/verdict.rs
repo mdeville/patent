@@ -284,6 +284,31 @@ fn parse_verdict(
     })
 }
 
+/// Build a verdict from the similarity data alone, without calling a model.
+///
+/// This is the `--fast` path (and any caller that deliberately skips Ollama).
+/// The saturation level is derived purely by [`floor_level`]-ing against the
+/// embeddings and the headline is the same safe, scoped, data-only sentence the
+/// flooring guard produces — so a no-LLM run still gives an honest signal,
+/// never flashes a misleading green "Open" over a clearly-populated space, and
+/// still carries the fixed integrity [`CAVEAT`]. Gaps require a model, so they
+/// are empty here.
+pub fn from_data(
+    matches: &[Match],
+    sources_checked: Vec<Source>,
+    sources_failed: Vec<Source>,
+) -> Verdict {
+    let level = floor_level(Saturation::Open, matches);
+    Verdict {
+        headline: data_headline(level, matches),
+        level,
+        gaps: vec![],
+        sources_checked,
+        sources_failed,
+        caveat: CAVEAT.to_string(),
+    }
+}
+
 /// Produce a [`Verdict`] from ranked matches via Ollama.
 pub async fn assess(
     ollama: &Ollama,

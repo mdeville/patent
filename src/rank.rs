@@ -59,6 +59,22 @@ fn model_cache_dir() -> Option<std::path::PathBuf> {
     dirs::cache_dir().map(|d| d.join("patent").join("fastembed"))
 }
 
+/// Whether the embedding model already appears to be cached locally.
+///
+/// Best-effort, used only so the binary can print a one-time "downloading…"
+/// notice on the first run (the ~80 MB fetch otherwise looks like a hang before
+/// `fastembed`'s own progress bar appears). If the cache dir can't be resolved
+/// we assume it's present and stay quiet rather than risk a spurious notice.
+pub fn model_is_cached() -> bool {
+    match model_cache_dir() {
+        Some(dir) => dir
+            .read_dir()
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false),
+        None => true,
+    }
+}
+
 impl Ranker {
     /// Load the embedding model. This is the expensive step; on the very first
     /// run it downloads ~80 MB into [`model_cache_dir`].

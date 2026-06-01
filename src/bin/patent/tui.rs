@@ -2,8 +2,9 @@
 //!
 //! Header (idea + sources-checked transparency line), verdict panel
 //! (🟢/🟡/🔴 + headline + gaps + caveat), and a scrollable/filterable matches
-//! table. `↑/↓` scroll, `/` filter, `m` show more, `Enter` open URL, `?` help,
-//! `q` quit.
+//! table. `↑/↓` scroll, `/` filter, `m` show more, `s` sort, `Enter` details,
+//! `o` open URL, `?` help, `q` quit; the mouse wheel scrolls and a click
+//! selects a row.
 
 use patent::model::{Match, Saturation, Source, Verdict};
 use patent::tui::{App, Mode};
@@ -16,6 +17,11 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
     },
     DefaultTerminal, Frame,
+};
+
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -101,7 +107,7 @@ fn wrapped_rows(text: &str, width: u16) -> u16 {
     rows.max(1)
 }
 
-fn draw(frame: &mut Frame, app: &App) {
+fn draw(frame: &mut Frame, app: &App, table_state: &mut TableState) -> Rect {
     let area = frame.area();
     let width = area.width;
     let verdict = app.verdict();
@@ -293,6 +299,7 @@ fn draw(frame: &mut Frame, app: &App) {
     } else {
         format!(" Matches ({}) ", displayed.len())
     };
+    let title = format!("{title}· sort: {} ", app.sort().label());
 
     let table = Table::new(
         rows,
@@ -323,11 +330,12 @@ fn draw(frame: &mut Frame, app: &App) {
             )),
     );
 
-    let mut table_state = TableState::default();
-    if !displayed.is_empty() {
+    if displayed.is_empty() {
+        table_state.select(None);
+    } else {
         table_state.select(Some(app.cursor().min(displayed.len() - 1)));
     }
-    frame.render_stateful_widget(table, table_area, &mut table_state);
+    frame.render_stateful_widget(table, table_area, table_state);
 
     // -- scrollbar: only when there's more than fits in the table viewport.
     // Chrome = top border + header row + header bottom_margin + bottom border.
@@ -363,7 +371,11 @@ fn draw(frame: &mut Frame, app: &App) {
             }
             spans.extend([
                 key_span("Enter"),
+                label_span(" details  "),
+                key_span("o"),
                 label_span(" open  "),
+                key_span("s"),
+                label_span(" sort  "),
                 key_span("?"),
                 label_span(" help  "),
                 key_span("q"),
@@ -385,18 +397,107 @@ fn draw(frame: &mut Frame, app: &App) {
             key_span("Esc"),
             label_span(" close help"),
         ],
+        Mode::Detail => vec![
+            label_span(" "),
+            key_span("o"),
+            label_span(" / "),
+            key_span("Enter"),
+            label_span(" open in browser  "),
+            key_span("Esc"),
+            label_span(" close"),
+        ],
     };
     let footer = Paragraph::new(Line::from(footer_spans));
     frame.render_widget(footer, footer_area);
 
-    // -- help overlay (drawn last so it floats above everything)
+    // -- overlays (drawn last so they float above everything)
     if app.mode() == Mode::Help {
         draw_help(frame);
     }
+    if app.mode() == Mode::Detail {
+        draw_detail(frame, app);
+    }
+
+    table_area
+}
+
+/// Floating popup with the selected match's full, untruncated details — the
+/// table clips descriptions and hides the URL/popularity, so this is where you
+/// actually read a match before opening it. (Inspired by flawz / gpg-tui.)
+fn draw_detail(frame: &mut Frame, app: &App) {
+    let Some(m) = app.selected_match() else {
+        return;
+    };
+    let area = centered_rect(72, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let popularity = match m.popularity {
+        Some(p) => p.to_string(),
+        None => "—".to_string(),
+    };
+    let label = |s: &'static str| Span::styled(format!("  {s:<12}"), Style::default().fg(MUTED));
+
+    let lines = vec![
+        Line::raw(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                m.name.as_str(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::raw(""),
+        Line::from(vec![
+            label("Source"),
+            Span::styled(
+                m.source.to_string(),
+                Style::default().fg(source_color(m.source)),
+            ),
+        ]),
+        Line::from(vec![
+            label("Similarity"),
+            Span::styled(
+                format!("{:.2}", m.similarity),
+                Style::default().fg(score_color(m.similarity)),
+            ),
+        ]),
+        Line::from(vec![label("Popularity"), Span::raw(popularity)]),
+        Line::raw(""),
+        Line::from(label("URL")),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                m.url.as_str(),
+                Style::default()
+                    .fg(ACCENT)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        ]),
+        Line::raw(""),
+        Line::from(label("Description")),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(m.description.as_str(), Style::default().fg(Color::White)),
+        ]),
+    ];
+
+    let detail = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .title(Span::styled(
+                " Match Details ",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )),
+    );
+    frame.render_widget(detail, area);
 }
 
 fn draw_help(frame: &mut Frame) {
-    let area = centered_rect(50, 70, frame.area());
+    let area = centered_rect(56, 84, frame.area());
     frame.render_widget(Clear, area);
 
     let lines = vec![
@@ -408,11 +509,17 @@ fn draw_help(frame: &mut Frame) {
         help_row("G / End", "Jump to bottom"),
         Line::raw(""),
         help_section("Actions"),
-        help_row("Enter", "Open in browser"),
+        help_row("Enter", "Show match details"),
+        help_row("o", "Open in browser"),
+        help_row("s", "Cycle sort (similarity/popularity/name)"),
         help_row("/", "Filter matches"),
         help_row("m", "Show more / less"),
         help_row("?", "Toggle this help"),
         help_row("q", "Quit"),
+        Line::raw(""),
+        help_section("Mouse"),
+        help_row("wheel", "Scroll the list"),
+        help_row("click", "Select a row"),
         Line::raw(""),
         help_section("Filter mode"),
         help_row("Esc", "Cancel filter"),
@@ -480,64 +587,102 @@ fn label_span(text: &str) -> Span<'_> {
     Span::styled(text, Style::default().add_modifier(Modifier::DIM))
 }
 
-fn handle_event(app: &mut App) -> std::io::Result<()> {
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+fn handle_event(app: &mut App, table_state: &TableState, table_area: Rect) -> std::io::Result<()> {
+    use crossterm::event::{
+        self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    };
 
-    let event = event::read()?;
+    match event::read()? {
+        Event::Key(key) => {
+            if key.kind != KeyEventKind::Press {
+                return Ok(());
+            }
 
-    if let Event::Key(key) = event {
-        if key.kind != KeyEventKind::Press {
-            return Ok(());
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                app.quit();
+                return Ok(());
+            }
+
+            match app.mode() {
+                Mode::Normal => match key.code {
+                    KeyCode::Char('q') => app.quit(),
+                    KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
+                    KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
+                    KeyCode::Home | KeyCode::Char('g') => app.scroll_to_top(),
+                    KeyCode::End | KeyCode::Char('G') => app.scroll_to_bottom(),
+                    KeyCode::Char('/') => app.enter_filter(),
+                    KeyCode::Char('m') => app.toggle_expand(),
+                    KeyCode::Char('s') => app.cycle_sort(),
+                    KeyCode::Char('?') => app.toggle_help(),
+                    KeyCode::Char('o') => open_selected(app),
+                    KeyCode::Enter => app.enter_detail(),
+                    _ => {}
+                },
+                Mode::Filter => match key.code {
+                    KeyCode::Esc => app.exit_filter(),
+                    KeyCode::Backspace => app.filter_pop(),
+                    KeyCode::Enter => app.confirm_filter(),
+                    KeyCode::Char(c) => app.filter_push(c),
+                    _ => {}
+                },
+                Mode::Help => match key.code {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.toggle_help(),
+                    _ => {}
+                },
+                Mode::Detail => match key.code {
+                    KeyCode::Char('o') | KeyCode::Enter => open_selected(app),
+                    KeyCode::Esc | KeyCode::Char('q') => app.exit_detail(),
+                    _ => {}
+                },
+            }
         }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            app.quit();
-            return Ok(());
-        }
-
-        match app.mode() {
-            Mode::Normal => match key.code {
-                KeyCode::Char('q') => app.quit(),
-                KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
-                KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
-                KeyCode::Home | KeyCode::Char('g') => app.scroll_to_top(),
-                KeyCode::End | KeyCode::Char('G') => app.scroll_to_bottom(),
-                KeyCode::Char('/') => app.enter_filter(),
-                KeyCode::Char('m') => app.toggle_expand(),
-                KeyCode::Char('?') => app.toggle_help(),
-                KeyCode::Enter => {
-                    if let Some(url) = app.selected_url() {
-                        let _ = open::that(url);
-                    }
+        // Mouse only steers the matches list, so it's only live in Normal mode.
+        Event::Mouse(mouse) if app.mode() == Mode::Normal => match mouse.kind {
+            MouseEventKind::ScrollDown => app.scroll_down(),
+            MouseEventKind::ScrollUp => app.scroll_up(),
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Data rows start 3 lines into the table block (top border +
+                // header row + header bottom-margin), shifted by however far the
+                // table has scrolled (the persisted TableState's offset).
+                let first_row = table_area.y.saturating_add(3);
+                let last_row = table_area
+                    .y
+                    .saturating_add(table_area.height)
+                    .saturating_sub(1);
+                let within_x = mouse.column >= table_area.x
+                    && mouse.column < table_area.x.saturating_add(table_area.width);
+                if within_x && mouse.row >= first_row && mouse.row < last_row {
+                    let row = (mouse.row - first_row) as usize;
+                    app.select_row(table_state.offset() + row);
                 }
-                _ => {}
-            },
-            Mode::Filter => match key.code {
-                KeyCode::Esc => app.exit_filter(),
-                KeyCode::Backspace => app.filter_pop(),
-                KeyCode::Enter => app.confirm_filter(),
-                KeyCode::Char(c) => app.filter_push(c),
-                _ => {}
-            },
-            Mode::Help => match key.code {
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.toggle_help(),
-                _ => {}
-            },
-        }
+            }
+            _ => {}
+        },
+        _ => {}
     }
 
     Ok(())
 }
 
+/// Open the selected match's URL in the default browser, if any.
+fn open_selected(app: &App) {
+    if let Some(url) = app.selected_url() {
+        let _ = open::that(url);
+    }
+}
+
 pub fn run(idea: &str, verdict: &Verdict, matches: &[Match]) -> anyhow::Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
         ratatui::restore();
         original_hook(info);
     }));
 
     let mut terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = run_loop(&mut terminal, idea, verdict, matches);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -549,10 +694,14 @@ fn run_loop(
     matches: &[Match],
 ) -> anyhow::Result<()> {
     let mut app = App::new(idea, verdict, matches);
+    let mut table_state = TableState::default();
+    let mut table_area = Rect::default();
 
     loop {
-        terminal.draw(|frame| draw(frame, &app))?;
-        handle_event(&mut app)?;
+        terminal.draw(|frame| {
+            table_area = draw(frame, &app, &mut table_state);
+        })?;
+        handle_event(&mut app, &table_state, table_area)?;
         if app.should_quit() {
             return Ok(());
         }
@@ -603,7 +752,43 @@ mod tests {
             matches,
         );
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, &app)).unwrap();
+        let mut table_state = TableState::default();
+        terminal
+            .draw(|f| {
+                draw(f, &app, &mut table_state);
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    /// Render an app that's been driven through `setup` first (e.g. into the
+    /// detail popup), returning the flattened buffer text.
+    fn rendered_with(
+        width: u16,
+        height: u16,
+        verdict: &Verdict,
+        matches: &[Match],
+        setup: impl FnOnce(&mut App),
+    ) -> String {
+        let mut app = App::new(
+            "an interactive cli to manage processes on a port",
+            verdict,
+            matches,
+        );
+        setup(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut table_state = TableState::default();
+        terminal
+            .draw(|f| {
+                draw(f, &app, &mut table_state);
+            })
+            .unwrap();
         terminal
             .backend()
             .buffer()
@@ -647,6 +832,35 @@ mod tests {
         let v = verdict_with(3, vec![Source::PyPI]);
         for (w, h) in [(1u16, 1u16), (10, 3), (40, 5), (80, 2)] {
             let _ = rendered(w, h, &v, &many_matches(50));
+        }
+    }
+
+    #[test]
+    fn table_title_shows_active_sort_key() {
+        let v = verdict_with(0, vec![]);
+        let text = rendered(100, 30, &v, &many_matches(5));
+        assert!(
+            text.contains("sort: similarity"),
+            "the matches table should surface the active sort key"
+        );
+    }
+
+    #[test]
+    fn detail_popup_shows_full_match_info() {
+        // The detail popup is where the otherwise-truncated URL and description
+        // are shown in full.
+        let v = verdict_with(1, vec![]);
+        let text = rendered_with(100, 30, &v, &many_matches(5), |app| app.enter_detail());
+        assert!(text.contains("Match Details"), "detail popup title shown");
+        assert!(text.contains("https://example.com/0"), "full URL shown");
+        assert!(text.contains("Description"), "description label shown");
+    }
+
+    #[test]
+    fn detail_popup_renders_without_panic_at_tiny_sizes() {
+        let v = verdict_with(1, vec![]);
+        for (w, h) in [(1u16, 1u16), (10, 3), (40, 8)] {
+            let _ = rendered_with(w, h, &v, &many_matches(5), |app| app.enter_detail());
         }
     }
 }
