@@ -57,41 +57,7 @@ async fn main() -> anyhow::Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        let icon = match verdict.level {
-            patent::Saturation::Open => "🟢",
-            patent::Saturation::Crowded => "🟡",
-            patent::Saturation::Saturated => "🔴",
-        };
-        println!("\n{icon} {:?} — {}", verdict.level, verdict.headline);
-        if !verdict.gaps.is_empty() {
-            println!("\nGaps:");
-            for gap in &verdict.gaps {
-                println!("  • {gap}");
-            }
-        }
-        println!("\nTop matches:");
-        for (i, m) in ranked.iter().enumerate() {
-            println!(
-                "{:>2}. [{:.2}] {} — {} ({})",
-                i + 1,
-                m.similarity,
-                m.name,
-                m.source,
-                m.url,
-            );
-            if !m.description.is_empty() {
-                println!("          {}", m.description);
-            }
-        }
-        eprintln!(
-            "\nSources checked: {}",
-            reached
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        eprintln!("⚠️  {}", patent::verdict::CAVEAT);
+        tui::run(&args.idea, &verdict, &ranked)?;
     }
 
     Ok(())
