@@ -28,23 +28,23 @@ futures = "0.3"
 async-trait = "0.1"
 
 # HTTP + serialization
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs", "query"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # HTML scraping (PyPI has no public search API; we parse the search page)
-scraper = "0.20"
+scraper = "0.27"
 
 # Errors
 anyhow = "1"
 thiserror = "2"
 
 # Ranking (M3) — semantic embeddings, model downloads on first run
-fastembed = "4"
+fastembed = "5"
 
 # TUI (M5)
 ratatui = "0.29"
-crossterm = "0.28"
+crossterm = "0.29"
 open = "5"
 
 [dev-dependencies]

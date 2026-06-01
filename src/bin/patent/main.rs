@@ -92,14 +92,14 @@ async fn main() -> anyhow::Result<()> {
     let (search_result, ranker_result) = tokio::join!(
         patent::sources::search_all(&query),
         tokio::task::spawn_blocking(move || {
-            let ranker = patent::rank::Ranker::new()?;
+            let mut ranker = patent::rank::Ranker::new()?;
             let query_emb = ranker.embed_query(&idea_for_embed)?;
             Ok::<_, patent::Error>((ranker, query_emb))
         })
     );
 
     let (raw_matches, reached) = search_result;
-    let (ranker, query_emb) = ranker_result.expect("embedding task panicked")?;
+    let (mut ranker, query_emb) = ranker_result.expect("embedding task panicked")?;
 
     eprintln!(
         "   {} matches from {} sources in {:.1}s: {}",
