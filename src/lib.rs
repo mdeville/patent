@@ -12,6 +12,7 @@ pub mod model;
 pub mod ollama;
 pub mod rank;
 pub mod sources;
+pub mod tui;
 pub mod verdict;
 
 pub use model::{Match, Query, Saturation, Source, Verdict};

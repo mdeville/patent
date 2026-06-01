@@ -1,0 +1,421 @@
+use patent::model::{Match, Saturation, Source, Verdict};
+use patent::tui::{App, Mode};
+use patent::verdict::CAVEAT;
+
+fn verdict() -> Verdict {
+    Verdict {
+        level: Saturation::Saturated,
+        headline: "Lots of prior art found in the sources checked.".into(),
+        gaps: vec!["no Windows support".into(), "no async API".into()],
+        sources_checked: vec![Source::Npm, Source::CratesIo, Source::GitHub],
+        caveat: CAVEAT.to_string(),
+    }
+}
+
+fn matches() -> Vec<Match> {
+    vec![
+        Match {
+            name: "kill-port".into(),
+            source: Source::Npm,
+            url: "https://npmjs.com/package/kill-port".into(),
+            description: "Kill process on a port".into(),
+            popularity: Some(50_000),
+            similarity: 0.85,
+        },
+        Match {
+            name: "fkill-cli".into(),
+            source: Source::Npm,
+            url: "https://npmjs.com/package/fkill-cli".into(),
+            description: "Fabulously kill processes".into(),
+            popularity: Some(10_000),
+            similarity: 0.72,
+        },
+        Match {
+            name: "port-killer".into(),
+            source: Source::CratesIo,
+            url: "https://crates.io/crates/port-killer".into(),
+            description: "Rust port killer utility".into(),
+            popularity: Some(500),
+            similarity: 0.60,
+        },
+    ]
+}
+
+// -- construction ------------------------------------------------------------
+
+#[test]
+fn new_app_starts_in_normal_mode() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("test idea", &v, &m);
+    assert_eq!(app.mode(), Mode::Normal);
+}
+
+#[test]
+fn new_app_starts_with_cursor_at_zero() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("test idea", &v, &m);
+    assert_eq!(app.cursor(), 0);
+}
+
+#[test]
+fn new_app_has_empty_filter() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("test idea", &v, &m);
+    assert!(app.filter_text().is_empty());
+}
+
+#[test]
+fn new_app_stores_idea() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("kill port tool", &v, &m);
+    assert_eq!(app.idea(), "kill port tool");
+}
+
+// -- scrolling ---------------------------------------------------------------
+
+#[test]
+fn scroll_down_increments_cursor() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.scroll_down();
+    assert_eq!(app.cursor(), 1);
+}
+
+#[test]
+fn scroll_down_clamps_at_last_item() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    for _ in 0..100 {
+        app.scroll_down();
+    }
+    assert_eq!(app.cursor(), 2); // 3 matches, max index is 2
+}
+
+#[test]
+fn scroll_up_decrements_cursor() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.scroll_down();
+    app.scroll_down();
+    app.scroll_up();
+    assert_eq!(app.cursor(), 1);
+}
+
+#[test]
+fn scroll_up_clamps_at_zero() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.scroll_up();
+    assert_eq!(app.cursor(), 0);
+}
+
+#[test]
+fn scroll_on_empty_matches_stays_at_zero() {
+    let v = verdict();
+    let empty: Vec<Match> = vec![];
+    let mut app = App::new("x", &v, &empty);
+    app.scroll_down();
+    assert_eq!(app.cursor(), 0);
+    app.scroll_up();
+    assert_eq!(app.cursor(), 0);
+}
+
+// -- filtering ---------------------------------------------------------------
+
+#[test]
+fn enter_filter_mode_switches_mode() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    assert_eq!(app.mode(), Mode::Filter);
+}
+
+#[test]
+fn exit_filter_mode_returns_to_normal() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.exit_filter();
+    assert_eq!(app.mode(), Mode::Normal);
+}
+
+#[test]
+fn filter_char_appends_to_filter_text() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('r');
+    app.filter_push('u');
+    assert_eq!(app.filter_text(), "ru");
+}
+
+#[test]
+fn filter_backspace_removes_last_char() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('a');
+    app.filter_push('b');
+    app.filter_pop();
+    assert_eq!(app.filter_text(), "a");
+}
+
+#[test]
+fn filter_backspace_on_empty_is_noop() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_pop();
+    assert!(app.filter_text().is_empty());
+}
+
+#[test]
+fn filtered_matches_returns_all_when_no_filter() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("x", &v, &m);
+    assert_eq!(app.visible_matches().len(), 3);
+}
+
+#[test]
+fn filtered_matches_filters_by_name() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('f');
+    app.filter_push('k');
+    let visible = app.visible_matches();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].name, "fkill-cli");
+}
+
+#[test]
+fn filtered_matches_filters_by_description() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('R');
+    app.filter_push('u');
+    app.filter_push('s');
+    app.filter_push('t');
+    let visible = app.visible_matches();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].name, "port-killer");
+}
+
+#[test]
+fn filter_is_case_insensitive() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('K');
+    app.filter_push('I');
+    app.filter_push('L');
+    app.filter_push('L');
+    let visible = app.visible_matches();
+    assert_eq!(visible.len(), 3);
+}
+
+#[test]
+fn filter_resets_cursor_to_zero() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.scroll_down();
+    app.scroll_down();
+    app.enter_filter();
+    app.filter_push('p');
+    assert_eq!(app.cursor(), 0);
+}
+
+#[test]
+fn cursor_clamps_when_filter_shrinks_visible() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.scroll_down();
+    app.scroll_down();
+    app.enter_filter();
+    app.filter_push('f');
+    app.filter_push('k');
+    assert!(app.cursor() < app.visible_matches().len());
+}
+
+#[test]
+fn exit_filter_clears_filter_text() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('x');
+    app.exit_filter();
+    assert!(app.filter_text().is_empty());
+    assert_eq!(app.visible_matches().len(), 3);
+}
+
+// -- selected URL ------------------------------------------------------------
+
+#[test]
+fn selected_url_returns_current_match_url() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.scroll_down();
+    assert_eq!(
+        app.selected_url(),
+        Some("https://npmjs.com/package/fkill-cli")
+    );
+}
+
+#[test]
+fn selected_url_returns_none_when_no_matches() {
+    let v = verdict();
+    let empty: Vec<Match> = vec![];
+    let app = App::new("x", &v, &empty);
+    assert_eq!(app.selected_url(), None);
+}
+
+#[test]
+fn selected_url_respects_filter() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('p');
+    app.filter_push('o');
+    app.filter_push('r');
+    app.filter_push('t');
+    app.filter_push('-');
+    app.filter_push('k');
+    assert_eq!(
+        app.selected_url(),
+        Some("https://crates.io/crates/port-killer")
+    );
+}
+
+// -- quit flag ---------------------------------------------------------------
+
+#[test]
+fn app_starts_running() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("x", &v, &m);
+    assert!(!app.should_quit());
+}
+
+#[test]
+fn quit_sets_flag() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.quit();
+    assert!(app.should_quit());
+}
+
+// -- confirm filter ----------------------------------------------------------
+
+#[test]
+fn confirm_filter_keeps_filter_text() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('f');
+    app.filter_push('k');
+    app.confirm_filter();
+    assert_eq!(app.mode(), Mode::Normal);
+    assert_eq!(app.filter_text(), "fk");
+    assert_eq!(app.visible_matches().len(), 1);
+}
+
+#[test]
+fn confirm_filter_preserves_cursor() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('k'); // all 3 match "kill"
+    app.confirm_filter();
+    app.scroll_down();
+    assert_eq!(app.cursor(), 1);
+}
+
+// -- scroll within filtered view ---------------------------------------------
+
+#[test]
+fn scroll_within_filtered_view_clamps_correctly() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('p');
+    app.filter_push('o');
+    app.filter_push('r');
+    app.filter_push('t');
+    // "kill-port" and "port-killer" match -> 2 visible
+    let count = app.visible_matches().len();
+    assert_eq!(count, 2);
+    app.scroll_down();
+    assert_eq!(app.cursor(), 1);
+    app.scroll_down();
+    assert_eq!(app.cursor(), 1); // clamped at last
+}
+
+// -- filter_pop widens visible set -------------------------------------------
+
+#[test]
+fn filter_pop_widens_visible_matches() {
+    let v = verdict();
+    let m = matches();
+    let mut app = App::new("x", &v, &m);
+    app.enter_filter();
+    app.filter_push('f');
+    app.filter_push('k');
+    assert_eq!(app.visible_matches().len(), 1);
+    app.filter_pop(); // back to "f" — "fkill-cli" still matches via "Fabulously"
+    assert!(!app.visible_matches().is_empty());
+    app.filter_pop(); // back to "" — all visible
+    assert_eq!(app.visible_matches().len(), 3);
+}
+
+// -- single match boundary ---------------------------------------------------
+
+#[test]
+fn single_match_scroll_stays_at_zero() {
+    let v = verdict();
+    let m = vec![matches().remove(0)];
+    let mut app = App::new("x", &v, &m);
+    app.scroll_down();
+    assert_eq!(app.cursor(), 0);
+    app.scroll_up();
+    assert_eq!(app.cursor(), 0);
+}
+
+// -- verdict accessors -------------------------------------------------------
+
+#[test]
+fn verdict_accessor_returns_the_verdict() {
+    let v = verdict();
+    let m = matches();
+    let app = App::new("x", &v, &m);
+    assert_eq!(app.verdict().level, Saturation::Saturated);
+    assert_eq!(app.verdict().gaps.len(), 2);
+    assert_eq!(app.verdict().sources_checked.len(), 3);
+    assert_eq!(app.verdict().caveat, CAVEAT);
+}

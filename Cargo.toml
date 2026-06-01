@@ -41,9 +41,9 @@ thiserror = "2"
 fastembed = "4"
 
 # TUI (M5)
-# ratatui = "0.29"
-# crossterm = "0.28"
-# open = "5"
+ratatui = "0.29"
+crossterm = "0.28"
+open = "5"
 
 [dev-dependencies]
 wiremock = "0.6"
