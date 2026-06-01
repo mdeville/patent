@@ -38,7 +38,7 @@ anyhow = "1"
 thiserror = "2"
 
 # Ranking (M3) — semantic embeddings, model downloads on first run
-# fastembed = "4"
+fastembed = "4"
 
 # TUI (M5)
 # ratatui = "0.29"

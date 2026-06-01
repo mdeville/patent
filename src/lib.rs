@@ -28,8 +28,8 @@ pub enum Error {
     #[error("ollama not reachable at {0} — run `ollama serve` and `ollama pull qwen2.5`")]
     OllamaUnreachable(String),
 
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
+    #[error("embedding failed: {0}")]
+    Embedding(String),
 }
 
 /// Crate result alias.
