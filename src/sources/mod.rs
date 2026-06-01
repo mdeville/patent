@@ -259,7 +259,14 @@ pub async fn search_sources(
 ) -> (Vec<Match>, Vec<crate::model::Source>) {
     let results = join_all(sources.iter().map(|s| {
         let id = s.id();
-        async move { (id, s.search(query).await) }
+        async move {
+            let first = s.search(query).await;
+            if first.is_ok() {
+                return (id, first);
+            }
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            (id, s.search(query).await)
+        }
     }))
     .await;
 

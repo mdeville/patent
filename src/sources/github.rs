@@ -74,7 +74,14 @@ impl SourceAdapter for GitHub {
             request = request.bearer_auth(token);
         }
 
-        let body: SearchResponse = request.send().await?.error_for_status()?.json().await?;
+        let response = request.send().await?;
+        if response.status() == reqwest::StatusCode::FORBIDDEN && self.token.is_none() {
+            return Err(crate::Error::Parse(
+                "GitHub API rate limit exceeded — set GITHUB_TOKEN env var for higher limits"
+                    .into(),
+            ));
+        }
+        let body: SearchResponse = response.error_for_status()?.json().await?;
 
         Ok(body
             .items

@@ -2,24 +2,21 @@
 //!
 //! Header (idea + sources-checked transparency line), verdict panel
 //! (🟢/🟡/🔴 + headline + gaps + caveat), and a scrollable/filterable matches
-//! table. `↑/↓` scroll, `/` filter, `m` show more, `Enter` open URL, `q` quit.
+//! table. `↑/↓` scroll, `/` filter, `m` show more, `Enter` open URL, `?` help,
+//! `q` quit.
 
 use patent::model::{Match, Saturation, Source, Verdict};
 use patent::tui::{App, Mode};
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Row, Table, Wrap},
     DefaultTerminal, Frame,
 };
 
-const CYAN: Color = Color::Cyan;
-const DIM: Color = Color::Rgb(100, 100, 100);
-const STRIPE: Color = Color::Rgb(30, 30, 40);
-const SELECT_BG: Color = Color::Rgb(50, 50, 80);
-const SELECT_FG: Color = Color::White;
-const BORDER: Color = Color::Rgb(80, 80, 100);
+const ACCENT: Color = Color::Cyan;
+const MUTED: Color = Color::DarkGray;
 
 fn level_icon(level: Saturation) -> &'static str {
     match level {
@@ -68,15 +65,13 @@ fn draw(frame: &mut Frame, app: &App) {
     let gap_rows = verdict.gaps.len() as u16;
     let verdict_height = (gap_rows + 7).min(frame.area().height / 3);
 
-    let [header_area, verdict_area, table_area, help_area] = Layout::vertical([
+    let [header_area, verdict_area, table_area, footer_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(verdict_height),
         Constraint::Min(5),
         Constraint::Length(1),
     ])
     .areas(frame.area());
-
-    let border_style = Style::default().fg(BORDER);
 
     // -- header
     let sources: Vec<Span> = verdict
@@ -86,7 +81,10 @@ fn draw(frame: &mut Frame, app: &App) {
         .flat_map(|(i, s)| {
             let mut spans = Vec::new();
             if i > 0 {
-                spans.push(Span::styled(" · ", Style::default().fg(DIM)));
+                spans.push(Span::styled(
+                    " · ",
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
             }
             spans.push(Span::styled(
                 s.to_string(),
@@ -96,15 +94,18 @@ fn draw(frame: &mut Frame, app: &App) {
         })
         .collect();
 
-    let mut source_line = vec![Span::styled(" Sources: ", Style::default().fg(DIM))];
+    let mut source_line = vec![Span::styled(
+        " Sources: ",
+        Style::default().add_modifier(Modifier::DIM),
+    )];
     source_line.extend(sources);
 
     let header = Paragraph::new(vec![
         Line::from(vec![
-            Span::styled(" 🔍 ", Style::default()),
+            Span::raw(" "),
             Span::styled(
                 app.idea(),
-                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(source_line),
@@ -112,7 +113,7 @@ fn draw(frame: &mut Frame, app: &App) {
     .block(
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(border_style),
+            .border_style(Style::default().fg(MUTED)),
     );
     frame.render_widget(header, header_area);
 
@@ -125,7 +126,7 @@ fn draw(frame: &mut Frame, app: &App) {
                 format!("{} {}", level_icon(verdict.level), verdict.level),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" — ", Style::default().fg(DIM)),
+            Span::styled(" — ", Style::default().add_modifier(Modifier::DIM)),
             Span::styled(
                 &verdict.headline,
                 Style::default()
@@ -144,12 +145,14 @@ fn draw(frame: &mut Frame, app: &App) {
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         format!(" ⚠  {}", verdict.caveat),
-        Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
+        Style::default()
+            .add_modifier(Modifier::DIM)
+            .add_modifier(Modifier::ITALIC),
     )));
     let verdict_panel = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(border_style)
+            .border_style(Style::default().fg(MUTED))
             .title(Span::styled(
                 " Verdict ",
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -167,36 +170,35 @@ fn draw(frame: &mut Frame, app: &App) {
         .map(|(i, m)| {
             let is_selected = i == app.cursor();
             let base = if is_selected {
-                Style::default().bg(SELECT_BG).fg(SELECT_FG)
-            } else if i % 2 == 1 {
-                Style::default().bg(STRIPE)
+                Style::default().add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
             };
 
             let score_style = if is_selected {
-                base.fg(score_color(m.similarity))
-                    .add_modifier(Modifier::BOLD)
+                base
             } else {
-                base.fg(score_color(m.similarity))
+                Style::default().fg(score_color(m.similarity))
             };
 
             let src_style = if is_selected {
-                base.add_modifier(Modifier::BOLD)
+                base
             } else {
-                base.fg(source_color(m.source))
+                Style::default().fg(source_color(m.source))
             };
 
             let name_style = if is_selected {
-                base.add_modifier(Modifier::BOLD)
+                base
             } else {
-                base.fg(Color::White)
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
             };
 
             let desc_style = if is_selected {
                 base
             } else {
-                base.fg(Color::Gray)
+                Style::default().add_modifier(Modifier::DIM)
             };
 
             Row::new(vec![
@@ -210,9 +212,19 @@ fn draw(frame: &mut Frame, app: &App) {
         .collect();
 
     let title = if app.mode() == Mode::Filter {
-        format!(" Matches [/{}] ", app.filter_text())
+        format!(
+            " Matches [/{}] ({}/{}) ",
+            app.filter_text(),
+            total_visible,
+            app.total_matches()
+        )
     } else if !app.filter_text().is_empty() {
-        format!(" Matches [{}] ", app.filter_text())
+        format!(
+            " Matches [{}] ({}/{}) ",
+            app.filter_text(),
+            total_visible,
+            app.total_matches()
+        )
     } else if app.has_more() {
         format!(
             " Matches ({}/{} — press m for more) ",
@@ -225,8 +237,6 @@ fn draw(frame: &mut Frame, app: &App) {
         format!(" Matches ({}) ", displayed.len())
     };
 
-    let header_style = Style::default().fg(CYAN).add_modifier(Modifier::BOLD);
-
     let table = Table::new(
         rows,
         [
@@ -238,13 +248,14 @@ fn draw(frame: &mut Frame, app: &App) {
     )
     .header(
         Row::new(vec!["Score", "Name", "Source", "Description"])
-            .style(header_style)
+            .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
             .bottom_margin(1),
     )
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(border_style)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
             .title(Span::styled(
                 title,
                 Style::default()
@@ -254,46 +265,137 @@ fn draw(frame: &mut Frame, app: &App) {
     );
     frame.render_widget(table, table_area);
 
-    // -- help bar
-    let help_spans = match app.mode() {
+    // -- footer hint bar
+    let footer_spans = match app.mode() {
         Mode::Normal => {
             let mut spans = vec![
-                key_span("↑↓"),
+                key_span(" ↑↓"),
                 label_span(" scroll  "),
                 key_span("/"),
                 label_span(" filter  "),
             ];
             if app.has_more() {
-                spans.extend([key_span("m"), label_span(" show more  ")]);
+                spans.extend([key_span("m"), label_span(" more  ")]);
             } else if app.is_expanded() {
-                spans.extend([key_span("m"), label_span(" show less  ")]);
+                spans.extend([key_span("m"), label_span(" less  ")]);
             }
             spans.extend([
                 key_span("Enter"),
                 label_span(" open  "),
+                key_span("?"),
+                label_span(" help  "),
                 key_span("q"),
                 label_span(" quit"),
             ]);
             spans
         }
         Mode::Filter => vec![
-            label_span("type to filter  "),
+            label_span(" type to filter  "),
             key_span("Esc"),
             label_span(" cancel  "),
             key_span("Enter"),
             label_span(" confirm"),
         ],
+        Mode::Help => vec![
+            label_span(" "),
+            key_span("?"),
+            label_span(" or "),
+            key_span("Esc"),
+            label_span(" close help"),
+        ],
     };
-    let help = Paragraph::new(Line::from(help_spans));
-    frame.render_widget(help, help_area);
+    let footer = Paragraph::new(Line::from(footer_spans));
+    frame.render_widget(footer, footer_area);
+
+    // -- help overlay (drawn last so it floats above everything)
+    if app.mode() == Mode::Help {
+        draw_help(frame);
+    }
+}
+
+fn draw_help(frame: &mut Frame) {
+    let area = centered_rect(50, 70, frame.area());
+    frame.render_widget(Clear, area);
+
+    let lines = vec![
+        Line::raw(""),
+        help_section("Navigation"),
+        help_row("↑ / k", "Scroll up"),
+        help_row("↓ / j", "Scroll down"),
+        help_row("g / Home", "Jump to top"),
+        help_row("G / End", "Jump to bottom"),
+        Line::raw(""),
+        help_section("Actions"),
+        help_row("Enter", "Open in browser"),
+        help_row("/", "Filter matches"),
+        help_row("m", "Show more / less"),
+        help_row("?", "Toggle this help"),
+        help_row("q", "Quit"),
+        Line::raw(""),
+        help_section("Filter mode"),
+        help_row("Esc", "Cancel filter"),
+        help_row("Enter", "Confirm filter"),
+        help_row("Backspace", "Delete character"),
+        Line::raw(""),
+    ];
+
+    let help = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT))
+            .title(Span::styled(
+                " Keybindings ",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            )),
+    );
+    frame.render_widget(help, area);
+}
+
+fn help_section(title: &str) -> Line<'_> {
+    Line::from(Span::styled(
+        format!("  {title}"),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn help_row<'a>(key: &'a str, desc: &'a str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {key:>12}  "),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(desc, Style::default().fg(Color::White)),
+    ])
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let [_, vert, _] = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .areas(area);
+    let [_, horiz, _] = Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .areas(vert);
+    horiz
 }
 
 fn key_span(text: &str) -> Span<'_> {
-    Span::styled(text, Style::default().fg(CYAN).add_modifier(Modifier::BOLD))
+    Span::styled(
+        text,
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    )
 }
 
 fn label_span(text: &str) -> Span<'_> {
-    Span::styled(text, Style::default().fg(DIM))
+    Span::styled(text, Style::default().add_modifier(Modifier::DIM))
 }
 
 fn handle_event(app: &mut App) -> std::io::Result<()> {
@@ -316,8 +418,11 @@ fn handle_event(app: &mut App) -> std::io::Result<()> {
                 KeyCode::Char('q') => app.quit(),
                 KeyCode::Down | KeyCode::Char('j') => app.scroll_down(),
                 KeyCode::Up | KeyCode::Char('k') => app.scroll_up(),
+                KeyCode::Home | KeyCode::Char('g') => app.scroll_to_top(),
+                KeyCode::End | KeyCode::Char('G') => app.scroll_to_bottom(),
                 KeyCode::Char('/') => app.enter_filter(),
                 KeyCode::Char('m') => app.toggle_expand(),
+                KeyCode::Char('?') => app.toggle_help(),
                 KeyCode::Enter => {
                     if let Some(url) = app.selected_url() {
                         let _ = open::that(url);
@@ -330,6 +435,10 @@ fn handle_event(app: &mut App) -> std::io::Result<()> {
                 KeyCode::Backspace => app.filter_pop(),
                 KeyCode::Enter => app.confirm_filter(),
                 KeyCode::Char(c) => app.filter_push(c),
+                _ => {}
+            },
+            Mode::Help => match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.toggle_help(),
                 _ => {}
             },
         }
