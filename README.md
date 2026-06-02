@@ -3,7 +3,6 @@
 **A prior-art search for your code ideas.** Stop building what already exists —
 find the state of the art in seconds, without leaving the terminal.
 
-[![crates.io](https://img.shields.io/crates/v/patent.svg)](https://crates.io/crates/patent)
 [![downloads](https://img.shields.io/crates/d/patent.svg)](https://crates.io/crates/patent)
 [![docs.rs](https://docs.rs/patent/badge.svg)](https://docs.rs/patent)
 [![CI](https://github.com/r14dd/patent/actions/workflows/ci.yml/badge.svg)](https://github.com/r14dd/patent/actions/workflows/ci.yml)
