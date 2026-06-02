@@ -9,6 +9,27 @@
 //! **Integrity principle:** this tool can prove something *exists*, but never
 //! that it *doesn't* — it only searched some sources. All output is scoped to
 //! "what was found in the sources checked."
+//!
+//! # Install
+//!
+//! ```bash
+//! cargo install patent
+//! ```
+//!
+//! # Usage
+//!
+//! ```bash
+//! patent "interactive cli to kill whatever's on a port"   # interactive TUI
+//! patent "react component for infinite scroll" --json      # structured output
+//! patent "kubernetes log viewer" --fast                    # skip the LLM verdict
+//! ```
+//!
+//! # Using the library
+//!
+//! `patent` is primarily the engine behind the CLI of the same name, but the
+//! core is reusable: [`sources::search_all`] fans out to the registries,
+//! [`rank`] orders matches by semantic similarity, and [`verdict::assess`]
+//! turns them into an integrity-scoped [`Verdict`] via a local Ollama model.
 
 pub mod model;
 pub mod ollama;
