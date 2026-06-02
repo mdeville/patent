@@ -77,7 +77,7 @@ pub fn model_is_cached() -> bool {
 
 impl Ranker {
     /// Load the embedding model. This is the expensive step; on the very first
-    /// run it downloads ~80 MB into [`model_cache_dir`].
+    /// run it downloads ~80 MB into `model_cache_dir`.
     pub fn new() -> crate::Result<Self> {
         let mut opts = fastembed::InitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2)
             .with_show_download_progress(true);
