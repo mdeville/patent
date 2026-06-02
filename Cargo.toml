@@ -11,7 +11,7 @@ documentation = "https://docs.rs/patent"
 authors = ["Riad Mukhtarov"]
 readme = "README.md"
 keywords = ["search", "cli", "prior-art", "semantic-search", "dev-tools"]
-categories = ["command-line-utilities"]
+categories = ["command-line-utilities", "development-tools"]
 exclude = [
     ".github/",
     ".claude/",
@@ -23,6 +23,7 @@ exclude = [
     # in the crate tarball.
     "demo.tape",
     "demo.gif",
+    "social-preview.png",
 ]
 
 [lib]

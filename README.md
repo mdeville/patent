@@ -4,8 +4,10 @@
 find the state of the art in seconds, without leaving the terminal.
 
 [![crates.io](https://img.shields.io/crates/v/patent.svg)](https://crates.io/crates/patent)
+[![downloads](https://img.shields.io/crates/d/patent.svg)](https://crates.io/crates/patent)
 [![docs.rs](https://docs.rs/patent/badge.svg)](https://docs.rs/patent)
 [![CI](https://github.com/r14dd/patent/actions/workflows/ci.yml/badge.svg)](https://github.com/r14dd/patent/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/r14dd/patent?style=flat&logo=github)](https://github.com/r14dd/patent/stargazers)
 [![license: MIT OR Apache-2.0](https://img.shields.io/crates/l/patent.svg)](#license)
 
 <p align="center">
