@@ -2,6 +2,8 @@
 //!
 //! Returns a clear, actionable error when the daemon is unreachable.
 
+use crate::llm::Llm;
+
 /// Default Ollama endpoint.
 pub const DEFAULT_ENDPOINT: &str = "http://localhost:11434";
 
@@ -30,9 +32,12 @@ impl Ollama {
             client,
         }
     }
+}
 
+#[async_trait::async_trait]
+impl Llm for Ollama {
     /// Send a prompt to `/api/generate` and return the completion text.
-    pub async fn generate(&self, prompt: &str) -> crate::Result<String> {
+    async fn generate(&self, prompt: &str) -> crate::Result<String> {
         let url = format!("{}/api/generate", self.endpoint);
         let body = serde_json::json!({
             "model": self.model,
@@ -50,7 +55,12 @@ impl Ollama {
             .json(&body)
             .send()
             .await
-            .map_err(|e| crate::Error::OllamaUnreachable(format!("{}: {e}", self.endpoint)))?;
+            .map_err(|e| {
+                crate::Error::LlmUnreachable(format!(
+                    "Ollama not reachable at {} ({e}). Run `ollama serve` and `ollama pull {}`.",
+                    self.endpoint, self.model
+                ))
+            })?;
 
         let status = response.status();
         let body = response
@@ -60,7 +70,7 @@ impl Ollama {
 
         // A non-success status (most commonly 404 for a model that hasn't been
         // pulled, or a 5xx from a proxy in front of Ollama) is a recoverable
-        // error: surface it as OllamaModel so the caller still renders results
+        // error: surface it as LlmRejected so the caller still renders results
         // instead of aborting. We try to lift Ollama's `{"error": "..."}`
         // message but never depend on the body being JSON.
         if !status.is_success() {
@@ -68,8 +78,8 @@ impl Ollama {
                 .ok()
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
                 .unwrap_or_else(|| format!("Ollama returned HTTP {}", status.as_u16()));
-            return Err(crate::Error::OllamaModel(format!(
-                "{reason} (model `{}`) — run `ollama pull {}`",
+            return Err(crate::Error::LlmRejected(format!(
+                "{reason} (model `{}`). Run `ollama pull {}`.",
                 self.model, self.model
             )));
         }
@@ -79,8 +89,8 @@ impl Ollama {
 
         // Some Ollama builds return 200 with an `{"error": ...}` body instead.
         if let Some(err) = json.get("error").and_then(|e| e.as_str()) {
-            return Err(crate::Error::OllamaModel(format!(
-                "{err} (model `{}`) — run `ollama pull {}`",
+            return Err(crate::Error::LlmRejected(format!(
+                "{err} (model `{}`). Run `ollama pull {}`.",
                 self.model, self.model
             )));
         }
@@ -89,6 +99,10 @@ impl Ollama {
             .as_str()
             .map(String::from)
             .ok_or_else(|| crate::Error::Parse("missing 'response' field".into()))
+    }
+
+    fn label(&self) -> &str {
+        "Ollama"
     }
 }
 

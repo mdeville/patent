@@ -1,12 +1,12 @@
 //! Verdict generation.
 //!
-//! Builds a prompt from the ranked matches and asks Ollama for a scoped verdict.
-//! The prompt **forbids claiming non-existence**: results are always phrased as
-//! "found in the sources checked", and a clean result means "keep looking before
-//! committing", never a green light.
+//! Builds a prompt from the ranked matches and asks an LLM backend (Ollama or
+//! any OpenAI-compatible API) for a scoped verdict. The prompt **forbids claiming
+//! non-existence**: results are always phrased as "found in the sources checked",
+//! and a clean result means "keep looking before committing", never a green light.
 
+use crate::llm::Llm;
 use crate::model::{Match, Query, Saturation, Source, Verdict};
-use crate::ollama::Ollama;
 
 /// The fixed humble caveat shown on every verdict. Never weaken this.
 pub const CAVEAT: &str = "Not proof it doesn't exist — only that nothing close turned up \
@@ -24,7 +24,7 @@ fn source_list(sources_checked: &[Source]) -> String {
         .join(", ")
 }
 
-/// Build the Ollama prompt enforcing the integrity rules.
+/// Build the LLM prompt enforcing the integrity rules.
 ///
 /// `sources_checked` must be the sources that actually responded — the prompt
 /// only ever tells the model about coverage that really happened, so the model
@@ -167,6 +167,29 @@ fn contains_absence_phrase(text: &str) -> bool {
     ABSENCE_PHRASES.iter().any(|p| lower.contains(p))
 }
 
+/// Phrases claiming nothing was found. Fine when matches are weak, but misleading
+/// when a genuinely close match is present, so they are guarded against below.
+const NO_MATCH_PHRASES: &[&str] = &[
+    "no direct match",
+    "no close match",
+    "no matching",
+    "no matches found",
+    "no match found",
+    "no relevant match",
+    "no clear match",
+    "no exact match",
+    "nothing closely related",
+    "no direct prior art",
+    "couldn't find any",
+    "could not find any",
+];
+
+/// True if `text` claims nothing was found.
+fn claims_no_match(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    NO_MATCH_PHRASES.iter().any(|p| lower.contains(p))
+}
+
 /// A safe, scoped headline derived purely from the data — never asserts absence.
 fn data_headline(level: Saturation, matches: &[Match]) -> String {
     let close = matches.iter().filter(|m| m.similarity >= 0.55).count();
@@ -179,8 +202,15 @@ fn data_headline(level: Saturation, matches: &[Match]) -> String {
             if close == 1 { "" } else { "s" }
         ),
         Saturation::Open => {
-            "Nothing close turned up in the sources checked — keep looking before committing."
-                .to_string()
+            if close == 0 {
+                "Nothing close turned up in the sources checked — keep looking before committing."
+                    .to_string()
+            } else {
+                format!(
+                    "{close} closely-related tool{} turned up, but the space still looks open in the sources checked. Worth a look before committing.",
+                    if close == 1 { "" } else { "s" }
+                )
+            }
         }
     }
 }
@@ -201,9 +231,11 @@ fn guard_headline(headline: String, level: Saturation, matches: &[Match]) -> Str
 fn floor_level(model_level: Saturation, matches: &[Match]) -> Saturation {
     let strong = matches.iter().filter(|m| m.similarity >= 0.60).count();
     let close = matches.iter().filter(|m| m.similarity >= 0.55).count();
+    // A single near-identical match (>= 0.70) already means the space isn't open.
+    let very_strong = matches.iter().filter(|m| m.similarity >= 0.70).count();
     let data_level = if strong >= 5 {
         Saturation::Saturated
-    } else if close >= 2 {
+    } else if close >= 2 || very_strong >= 1 {
         Saturation::Crowded
     } else {
         Saturation::Open
@@ -274,6 +306,16 @@ fn parse_verdict(
     };
     let headline = guard_headline(headline, level, matches);
 
+    // A close match (>= 0.55) is real prior art, so a "found nothing" headline
+    // would be misleading even when the level stays Open. Replace it with the
+    // data-derived headline, which names the close matches.
+    let close = matches.iter().filter(|m| m.similarity >= 0.55).count();
+    let headline = if close >= 1 && claims_no_match(&headline) {
+        data_headline(level, matches)
+    } else {
+        headline
+    };
+
     Ok(Verdict {
         level,
         headline,
@@ -309,15 +351,15 @@ pub fn from_data(
     }
 }
 
-/// Produce a [`Verdict`] from ranked matches via Ollama.
+/// Produce a [`Verdict`] from ranked matches via an [`Llm`] backend.
 pub async fn assess(
-    ollama: &Ollama,
+    llm: &dyn Llm,
     query: &Query,
     matches: &[Match],
     sources_checked: Vec<Source>,
     sources_failed: Vec<Source>,
 ) -> crate::Result<Verdict> {
     let prompt = build_prompt(query, matches, &sources_checked);
-    let raw = ollama.generate(&prompt).await?;
+    let raw = llm.generate(&prompt).await?;
     parse_verdict(&raw, matches, sources_checked, sources_failed)
 }

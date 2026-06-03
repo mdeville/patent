@@ -15,11 +15,20 @@ pub struct Cli {
     #[arg(long, default_value_t = patent::rank::DEFAULT_LIMIT as u32, value_parser = clap::value_parser!(u32).range(1..))]
     pub limit: u32,
 
-    /// Ollama model to use for the verdict.
-    #[arg(long, default_value = patent::ollama::DEFAULT_MODEL)]
-    pub model: String,
+    /// LLM model for the verdict. Defaults to qwen2.5 for Ollama; required with --api-base.
+    #[arg(long)]
+    pub model: Option<String>,
 
-    /// Skip the Ollama verdict for an instant, search-only result.
+    /// Use an OpenAI-compatible API instead of local Ollama. Base URL ending in
+    /// /v1, e.g. https://api.openai.com/v1 or http://localhost:1234/v1.
+    #[arg(long, value_name = "URL")]
+    pub api_base: Option<String>,
+
+    /// API key for --api-base (or set OPENAI_API_KEY). Omit for servers without auth.
+    #[arg(long, value_name = "KEY")]
+    pub api_key: Option<String>,
+
+    /// Skip the LLM verdict for an instant, search-only result.
     #[arg(long)]
     pub fast: bool,
 

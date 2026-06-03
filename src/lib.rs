@@ -22,6 +22,7 @@
 //! patent "interactive cli to kill whatever's on a port"   # interactive TUI
 //! patent "react component for infinite scroll" --json      # structured output
 //! patent "kubernetes log viewer" --fast                    # skip the LLM verdict
+//! patent "vector database" --api-base https://api.openai.com/v1 --model gpt-4o-mini
 //! ```
 //!
 //! # Using the library
@@ -29,15 +30,19 @@
 //! `patent` is primarily the engine behind the CLI of the same name, but the
 //! core is reusable: [`sources::search_all`] fans out to the registries,
 //! [`rank`] orders matches by semantic similarity, and [`verdict::assess`]
-//! turns them into an integrity-scoped [`Verdict`] via a local Ollama model.
+//! turns them into an integrity-scoped [`Verdict`] via any [`Llm`] backend
+//! (local Ollama or an OpenAI-compatible API).
 
+pub mod llm;
 pub mod model;
 pub mod ollama;
+pub mod openai;
 pub mod rank;
 pub mod sources;
 pub mod tui;
 pub mod verdict;
 
+pub use llm::Llm;
 pub use model::{Match, Query, Saturation, Source, Verdict};
 
 /// Library-level error type. The binary maps these to `anyhow` with context.
@@ -49,13 +54,14 @@ pub enum Error {
     #[error("failed to parse response: {0}")]
     Parse(String),
 
-    #[error("ollama not reachable at {0} — run `ollama serve` and `ollama pull qwen2.5`")]
-    OllamaUnreachable(String),
+    /// LLM endpoint could not be reached. The message carries the address and a hint.
+    #[error("{0}")]
+    LlmUnreachable(String),
 
-    /// Ollama is reachable but rejected the request — most commonly because the
-    /// requested model has not been pulled. Carries a human-readable reason.
-    #[error("ollama could not generate a verdict: {0}")]
-    OllamaModel(String),
+    /// LLM endpoint was reached but rejected the request (unknown model, bad key,
+    /// server error). The message carries the reason and a hint.
+    #[error("{0}")]
+    LlmRejected(String),
 
     #[error("embedding failed: {0}")]
     Embedding(String),

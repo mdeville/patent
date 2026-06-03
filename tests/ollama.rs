@@ -1,3 +1,4 @@
+use patent::llm::Llm;
 use patent::ollama::Ollama;
 use serde_json::json;
 use wiremock::matchers::{body_json_string, method, path};
@@ -56,12 +57,12 @@ async fn generate_sends_model_and_prompt() {
 }
 
 #[tokio::test]
-async fn generate_maps_connection_error_to_ollama_unreachable() {
+async fn generate_maps_connection_error_to_llm_unreachable() {
     let ollama = Ollama::new("http://127.0.0.1:1", "qwen2.5");
     let err = ollama.generate("hi").await.unwrap_err();
     assert!(
-        matches!(err, patent::Error::OllamaUnreachable(_)),
-        "expected OllamaUnreachable, got: {err:?}"
+        matches!(err, patent::Error::LlmUnreachable(_)),
+        "expected LlmUnreachable, got: {err:?}"
     );
 }
 
@@ -85,10 +86,10 @@ async fn generate_maps_server_error_to_parse() {
 }
 
 #[tokio::test]
-async fn generate_maps_model_not_found_to_ollama_model_error() {
+async fn generate_maps_model_not_found_to_llm_rejected() {
     // Ollama is reachable but the model isn't pulled: it returns 404 with an
-    // {"error": ...} body. This must be a recoverable OllamaModel error (so the
-    // run degrades gracefully) — not a fatal Parse error.
+    // {"error": ...} body. This must be a recoverable LlmRejected error (so the
+    // run degrades gracefully), not a fatal Parse error.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/generate"))
@@ -105,7 +106,7 @@ async fn generate_maps_model_not_found_to_ollama_model_error() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, patent::Error::OllamaModel(_)),
-        "expected OllamaModel, got: {err:?}"
+        matches!(err, patent::Error::LlmRejected(_)),
+        "expected LlmRejected, got: {err:?}"
     );
 }

@@ -99,6 +99,21 @@ async fn main() -> anyhow::Result<()> {
         .expect("idea is required when not using --completions");
     validate_idea(&idea)?;
 
+    // Validate backend flags up front so the contract doesn't depend on the
+    // query's similarity score (the verdict step is skipped on --fast and on
+    // low-relevance results).
+    if !args.fast && args.api_base.is_some() && args.model.is_none() {
+        anyhow::bail!(
+            "--api-base requires a model; pass --model <NAME> (e.g. --model gpt-4o-mini)."
+        );
+    }
+    if args.api_key.is_some() && args.api_base.is_none() {
+        eprintln!("warning: --api-key has no effect without --api-base; using local Ollama.");
+    }
+    if args.fast && args.api_base.is_some() {
+        eprintln!("warning: --fast skips the LLM, so --api-base has no effect.");
+    }
+
     let query = build_query(&idea);
     eprintln!("Searching for prior art: \"{}\"", idea);
     eprintln!("   keywords: {}", query.keywords.join(", "));
@@ -172,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
     let verdict = if args.fast {
         // --fast: no model warm-up, no inference wait. The level is floored
         // from the similarity data (still honest, still carries the caveat).
-        eprintln!("--fast: skipping Ollama — verdict from similarity data only");
+        eprintln!("--fast: skipping the LLM (verdict from similarity data only)");
         patent::verdict::from_data(&ranked, reached.clone(), failed.clone())
     } else if best_sim < MIN_RELEVANCE {
         eprintln!(
@@ -185,39 +200,48 @@ async fn main() -> anyhow::Result<()> {
              try rephrasing with specific technical terms.",
         )
     } else {
+        // --api-base without --model already errored up front, so None here means
+        // the local Ollama default.
+        let model = args
+            .model
+            .clone()
+            .unwrap_or_else(|| patent::ollama::DEFAULT_MODEL.to_string());
+
+        let llm: Box<dyn patent::Llm> = match &args.api_base {
+            Some(base) => {
+                let key = args
+                    .api_key
+                    .clone()
+                    .or_else(|| std::env::var("OPENAI_API_KEY").ok());
+                Box::new(patent::openai::OpenAi::new(
+                    base.clone(),
+                    model.clone(),
+                    key,
+                ))
+            }
+            None => Box::new(patent::ollama::Ollama::new(
+                patent::ollama::DEFAULT_ENDPOINT,
+                model.clone(),
+            )),
+        };
+
         let t_verdict = std::time::Instant::now();
-        eprintln!("Generating verdict via Ollama ({})...", args.model);
-        let ollama = patent::ollama::Ollama::new(patent::ollama::DEFAULT_ENDPOINT, &args.model);
-        match patent::verdict::assess(&ollama, &query, &ranked, reached.clone(), failed.clone())
-            .await
+        eprintln!("Generating verdict via {} ({})...", llm.label(), model);
+        match patent::verdict::assess(&*llm, &query, &ranked, reached.clone(), failed.clone()).await
         {
             Ok(v) => {
                 eprintln!("   verdict in {:.1}s", t_verdict.elapsed().as_secs_f64());
                 v
             }
-            Err(patent::Error::OllamaUnreachable(ref addr)) => {
-                eprintln!(
-                    "warning: Ollama not reachable at {addr} — showing results without verdict.\n   \
-                     Run `ollama serve` and `ollama pull {model}` to enable AI verdicts.",
-                    model = args.model,
-                );
+            // Best-effort: any backend or parse failure degrades to a search-only
+            // result rather than aborting the run.
+            Err(e) => {
+                eprintln!("warning: {e}");
+                eprintln!("   showing results without an AI verdict.");
                 fallback_verdict(
-                    "Verdict unavailable — Ollama not reachable. \
-                     Results are ranked by semantic similarity only.",
+                    "Verdict unavailable — results are ranked by semantic similarity only.",
                 )
             }
-            Err(patent::Error::OllamaModel(ref why)) => {
-                eprintln!(
-                    "warning: {why} — showing results without an AI verdict.\n   \
-                     Run `ollama pull {model}` to enable AI verdicts.",
-                    model = args.model,
-                );
-                fallback_verdict(
-                    "Verdict unavailable — the requested Ollama model isn't available. \
-                     Results are ranked by semantic similarity only.",
-                )
-            }
-            Err(e) => return Err(e.into()),
         }
     };
 
