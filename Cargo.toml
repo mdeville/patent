@@ -1,6 +1,6 @@
 [package]
 name = "patent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
@@ -14,8 +14,6 @@ keywords = ["search", "cli", "prior-art", "semantic-search", "dev-tools"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = [
     ".github/",
-    ".claude/",
-    "CLAUDE.md",
     "clippy.toml",
     "rustfmt.toml",
     ".plan-source.md",

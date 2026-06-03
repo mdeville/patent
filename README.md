@@ -65,20 +65,21 @@ patent "kubernetes log viewer" --fast
   [fastembed](https://crates.io/crates/fastembed)) rank every match by cosine
   similarity to your idea, so the closest prior art floats to the top.
 - **An honest verdict, not hype** — a local [Ollama](https://ollama.com) model
-  classifies the space as Open / Crowded / Saturated and names the gaps you
-  could fill. It can prove something *exists*; it never claims something
-  *doesn't*.
+  (or any OpenAI-compatible API via `--api-base`) classifies the space as Open /
+  Crowded / Saturated and names the gaps you could fill. It can prove something
+  *exists*; it never claims something *doesn't*.
 - **Instant mode** — `--fast` skips the LLM and gives you the ranked list
   immediately, with a saturation level derived straight from the similarity
   data.
 - **See it, don't parse it** — an interactive TUI with scrollable, filterable,
   sortable matches, a detail popup for any result, mouse support, and one-key
   URL opening. Need machine output? `--json`.
-- **Fully local & private** — no data leaves your machine; embeddings and the
-  LLM both run locally.
-- **Never fails loud** — Ollama down, or the model not pulled? Results still
-  render, ranked by similarity, without an AI verdict. A source fails? It's
-  skipped (and shown as "not reached"), never fatal.
+- **Local-first & private** — embeddings always run on your machine, and the
+  verdict uses a local LLM by default; point `--api-base` at a cloud API only if
+  you want to.
+- **Never fails loud** — LLM down, model not pulled, or a cloud API rejecting
+  the request? Results still render, ranked by similarity, without an AI verdict.
+  A source fails? It's skipped (and shown as "not reached"), never fatal.
 
 ## Install
 
@@ -118,6 +119,21 @@ ollama pull qwen2.5
 ollama serve
 ```
 
+**Cloud or OpenAI-compatible API** (alternative to Ollama) — point `patent` at
+any server that speaks the OpenAI chat API with `--api-base`, plus `--api-key`
+(or the `OPENAI_API_KEY` env var):
+
+```bash
+# OpenAI
+patent "vector database" --api-base https://api.openai.com/v1 --model gpt-4o-mini --api-key sk-...
+
+# OpenRouter
+patent "vector database" --api-base https://openrouter.ai/api/v1 --model openai/gpt-4o-mini --api-key sk-or-...
+
+# Local LM Studio / llama.cpp / vLLM (usually no key needed)
+patent "vector database" --api-base http://localhost:1234/v1 --model your-model
+```
+
 **GitHub token** (optional) — the unauthenticated GitHub search API is limited
 to 10 requests/minute. Set a token to raise that to 30 requests/minute (3×):
 
@@ -152,6 +168,9 @@ patent "react component for infinite scroll" --json | jq .
 # Use a smaller/faster Ollama model
 patent "kubernetes log viewer" --model qwen2.5:3b
 
+# Use a cloud LLM instead of local Ollama
+patent "kubernetes log viewer" --api-base https://api.openai.com/v1 --model gpt-4o-mini
+
 # Keep more matches after ranking
 patent "async runtime for rust" --limit 100
 ```
@@ -160,9 +179,11 @@ patent "async runtime for rust" --limit 100
 
 | Flag | Description | Default |
 |---|---|---|
-| `--fast` | Skip the Ollama verdict for an instant, search-only result | — |
+| `--fast` | Skip the LLM verdict for an instant, search-only result | — |
 | `--json` | Print JSON to stdout instead of the TUI | — |
-| `--model <MODEL>` | Ollama model for the verdict | `qwen2.5` |
+| `--model <MODEL>` | LLM model for the verdict | `qwen2.5` (Ollama) |
+| `--api-base <URL>` | Use an OpenAI-compatible API (base URL ending in `/v1`) instead of Ollama | — |
+| `--api-key <KEY>` | API key for `--api-base` (or set `OPENAI_API_KEY`) | — |
 | `--limit <N>` | Max matches to keep after ranking | `50` |
 | `--completions <SHELL>` | Generate shell completions and exit | — |
 
@@ -215,7 +236,7 @@ idea ──► parse keywords
          load model ──► rank by cosine similarity
                               │
                               ▼
-                        verdict via Ollama
+                        verdict via LLM
                               │
                               ▼
                         TUI or JSON
@@ -226,9 +247,10 @@ idea ──► parse keywords
    skipped and retried once, never fatal
 3. **Rank** — embeds the idea and each match description with AllMiniLM-L6-V2,
    sorts by cosine similarity, keeps the top N
-4. **Verdict** — sends the ranked matches to a local Ollama model that
-   classifies the space and identifies gaps (or, with `--fast`, derives the
-   level straight from the similarity data)
+4. **Verdict** — sends the ranked matches to an LLM (local Ollama by default, or
+   an OpenAI-compatible API via `--api-base`) that classifies the space and
+   identifies gaps (or, with `--fast`, derives the level straight from the
+   similarity data)
 5. **Output** — interactive TUI (default) or structured JSON (`--json`)
 
 The embedding model loads concurrently with source searches, so the model-load
@@ -265,8 +287,10 @@ src/
 │   ├── docker_hub.rs   # Docker Hub API
 │   └── vscode.rs       # VS Code Marketplace API
 ├── rank.rs             # fastembed embeddings + cosine similarity
-├── verdict.rs          # Ollama prompt + response parsing
-├── ollama.rs           # minimal Ollama client
+├── verdict.rs          # LLM prompt + response parsing
+├── llm.rs              # trait Llm (verdict backend interface)
+├── ollama.rs           # Llm impl: native Ollama client
+├── openai.rs           # Llm impl: OpenAI-compatible chat client
 └── tui.rs              # TUI state machine
 src/bin/patent/
 ├── main.rs             # CLI entry point, pipeline wiring

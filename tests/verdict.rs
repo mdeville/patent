@@ -335,6 +335,66 @@ async fn assess_threads_failed_sources_into_verdict() {
     assert_eq!(v.sources_failed, vec![Source::PyPI, Source::CratesIo]);
 }
 
+#[tokio::test]
+async fn assess_replaces_no_match_headline_when_a_close_match_exists() {
+    // A single 0.57 match keeps the level Open, but a "no direct matches" headline
+    // would be misleading when that match is real prior art. It must be replaced
+    // with one that names the close match.
+    let matches = vec![Match {
+        name: "patent".into(),
+        source: Source::CratesIo,
+        url: "https://crates.io/crates/patent".into(),
+        description: "A prior-art search for your code ideas".into(),
+        popularity: None,
+        similarity: 0.57,
+    }];
+    let server = mock_ollama(ollama_response(
+        "Open",
+        "No direct matches found in the sources checked.",
+        &[],
+    ))
+    .await;
+
+    let ollama = Ollama::new(server.uri(), "qwen2.5");
+    let v = verdict::assess(&ollama, &query(), &matches, checked(), vec![])
+        .await
+        .unwrap();
+
+    assert_eq!(v.level, Saturation::Open, "one 0.57 match stays Open");
+    let lower = v.headline.to_lowercase();
+    assert!(
+        !lower.contains("no direct match"),
+        "misleading 'no match' headline must be replaced: {:?}",
+        v.headline
+    );
+    assert!(
+        lower.contains("closely-related"),
+        "replacement headline should name the close match: {:?}",
+        v.headline
+    );
+}
+
+#[tokio::test]
+async fn assess_floors_single_very_strong_match_to_crowded() {
+    // A lone near-identical match (>= 0.70) must lift the level off Open even
+    // though only one match exists (the close >= 2 path does not apply here).
+    let matches = vec![Match {
+        name: "twin".into(),
+        source: Source::CratesIo,
+        url: "https://crates.io/crates/twin".into(),
+        description: "Nearly the same idea".into(),
+        popularity: None,
+        similarity: 0.72,
+    }];
+    let server = mock_ollama(ollama_response("Open", "A benign headline.", &[])).await;
+    let ollama = Ollama::new(server.uri(), "qwen2.5");
+    let v = verdict::assess(&ollama, &query(), &matches, checked(), vec![])
+        .await
+        .unwrap();
+    assert_eq!(v.level, Saturation::Crowded, "0.72 single match => Crowded");
+    assert!(v.headline.to_lowercase().contains("closely-related"));
+}
+
 // -- from_data() — the --fast / no-LLM path -----------------------------------
 
 #[test]
@@ -353,6 +413,23 @@ fn from_data_floors_level_against_similarity() {
 fn from_data_open_when_nothing_close() {
     let v = verdict::from_data(&[], vec![Source::GitHub], vec![]);
     assert_eq!(v.level, Saturation::Open);
+    assert_eq!(v.caveat, CAVEAT);
+}
+
+#[test]
+fn from_data_floors_single_very_strong_match_to_crowded() {
+    // The no-LLM path routes through the same floor: one >= 0.70 match => Crowded.
+    let matches = vec![Match {
+        name: "twin".into(),
+        source: Source::CratesIo,
+        url: "https://crates.io/crates/twin".into(),
+        description: "Nearly the same idea".into(),
+        popularity: None,
+        similarity: 0.72,
+    }];
+    let v = verdict::from_data(&matches, checked(), vec![]);
+    assert_eq!(v.level, Saturation::Crowded);
+    assert!(v.gaps.is_empty());
     assert_eq!(v.caveat, CAVEAT);
 }
 
