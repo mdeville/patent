@@ -92,6 +92,88 @@ fn prompt_names_only_the_sources_actually_checked() {
     );
 }
 
+#[test]
+fn prompt_uses_skeptical_reviewer_persona() {
+    let prompt = verdict::build_prompt(&query(), &sample_matches(), &checked());
+    let lower = prompt.to_lowercase();
+    assert!(
+        lower.contains("skeptic") || lower.contains("default assumption"),
+        "prompt should frame the reviewer as skeptical"
+    );
+}
+
+#[tokio::test]
+async fn assess_drops_gaps_naming_a_top_match() {
+    // A gap that names a top-10 match by name should be filtered out — the model
+    // naming "kill-port" in a gap is confirming it exists, not identifying open
+    // space. A clean gap with no match name must survive.
+    let server = mock_ollama(ollama_response(
+        "Crowded",
+        "Several tools exist in the sources checked.",
+        &[
+            "kill-port does not support IPv6",
+            "none of the tools support Windows arm64",
+        ],
+    ))
+    .await;
+
+    let ollama = Ollama::new(server.uri(), "qwen2.5");
+    let v = verdict::assess(&ollama, &query(), &sample_matches(), checked(), vec![])
+        .await
+        .unwrap();
+
+    assert_eq!(v.gaps.len(), 1, "gap naming a top match must be dropped");
+    assert!(
+        v.gaps[0].contains("Windows arm64"),
+        "clean gap should survive"
+    );
+}
+
+#[tokio::test]
+async fn assess_gap_filter_uses_word_boundaries() {
+    // "at" is a match name that appears as a *substring* inside "automatically".
+    // The gap must survive — only whole-word occurrences should be filtered.
+    let matches_with_short_name = vec![Match {
+        name: "at".to_string(),
+        source: Source::Npm,
+        url: "https://npmjs.com/package/at".into(),
+        description: "schedule tasks".into(),
+        popularity: Some(1000),
+        similarity: 0.80,
+    }];
+
+    let server = mock_ollama(ollama_response(
+        "Crowded",
+        "Several tools exist in the sources checked.",
+        &[
+            "automatically handles port conflicts", // "at" is a substring here → must survive
+            "at startup it reads config",           // "at" as a whole word → must be dropped
+        ],
+    ))
+    .await;
+
+    let ollama = Ollama::new(server.uri(), "qwen2.5");
+    let v = verdict::assess(
+        &ollama,
+        &query(),
+        &matches_with_short_name,
+        checked(),
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        v.gaps.len(),
+        1,
+        "only the whole-word 'at' gap should be dropped"
+    );
+    assert!(
+        v.gaps[0].contains("automatically"),
+        "substring occurrence must not filter the gap"
+    );
+}
+
 // -- assess() end-to-end via wiremock -----------------------------------------
 
 fn ollama_response(level: &str, headline: &str, gaps: &[&str]) -> serde_json::Value {
@@ -393,6 +475,37 @@ async fn assess_floors_single_very_strong_match_to_crowded() {
         .unwrap();
     assert_eq!(v.level, Saturation::Crowded, "0.72 single match => Crowded");
     assert!(v.headline.to_lowercase().contains("closely-related"));
+}
+
+#[tokio::test]
+async fn assess_retries_on_server_error() {
+    let server = MockServer::start().await;
+
+    // 500 registered first — expires after one match, then the 200 takes over.
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(ResponseTemplate::new(500))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    // 200 registered second — becomes active once the 500 is exhausted.
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ollama_response(
+            "Crowded",
+            "Several tools exist in the sources checked.",
+            &[],
+        )))
+        .mount(&server)
+        .await;
+
+    let ollama = Ollama::new(server.uri(), "qwen2.5");
+    let v = verdict::assess(&ollama, &query(), &sample_matches(), checked(), vec![])
+        .await
+        .unwrap();
+
+    assert_eq!(v.level, Saturation::Crowded);
 }
 
 // -- from_data() — the --fast / no-LLM path -----------------------------------

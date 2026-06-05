@@ -53,6 +53,17 @@ fn validate_idea(idea: &str) -> anyhow::Result<()> {
         );
     }
 
+    let non_stopword_count = meaningful
+        .iter()
+        .filter(|w| !STOPWORDS.contains(&w.as_str()))
+        .count();
+    if non_stopword_count < 2 {
+        anyhow::bail!(
+            "Too vague — describe a specific software tool or feature, e.g.\n  \
+             patent \"CLI tool that kills a process on a given port\""
+        );
+    }
+
     Ok(())
 }
 
@@ -289,6 +300,18 @@ mod tests {
         assert!(validate_idea("foobar").is_err());
         assert!(validate_idea("123456").is_err());
         assert!(validate_idea("hello world").is_err());
+    }
+
+    #[test]
+    fn validate_idea_rejects_fewer_than_two_non_stopwords() {
+        // Zero non-stopwords — build_query produces empty keywords.
+        assert!(validate_idea("the and for are but not").is_err());
+        assert!(validate_idea("those would other great found first").is_err());
+        // One non-stopword — "tool" alone generates noise results for any query.
+        assert!(validate_idea("what does this tool have with them").is_err());
+        assert!(validate_idea("the and for tool are but not").is_err());
+        // Two non-stopwords — acceptable minimum.
+        assert!(validate_idea("the and for tool linting what").is_ok());
     }
 
     #[test]

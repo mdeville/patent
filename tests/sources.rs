@@ -752,6 +752,32 @@ async fn hn_strips_html_from_story_text() {
     assert_eq!(matches[0].description, "A tool that does things.");
 }
 
+#[tokio::test]
+async fn hn_bare_ampersand_does_not_eat_remaining_text() {
+    // A bare '&' with no closing ';' must be emitted as a literal and must NOT
+    // consume the text that follows it.
+    let server = MockServer::start().await;
+    let body = json!({
+        "hits": [{
+            "title": "Show HN: Something",
+            "story_text": "fast tool for C & C++",
+            "objectID": "11111",
+            "points": 5
+        }]
+    });
+    Mock::given(method("GET"))
+        .and(path("/api/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let matches = hn_for(&server).search(&query()).await.unwrap();
+    assert_eq!(
+        matches[0].description, "fast tool for C & C++",
+        "text after bare '&' must not be eaten"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fan-out + dedup
 // ---------------------------------------------------------------------------

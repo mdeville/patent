@@ -69,11 +69,21 @@ fn decode_html_entities(s: &str) -> String {
             continue;
         }
         let mut entity = String::new();
+        let mut terminated = false;
         for ec in chars.by_ref() {
             if ec == ';' {
+                terminated = true;
                 break;
             }
             entity.push(ec);
+            if entity.len() > 10 || (!ec.is_alphanumeric() && ec != '#') {
+                break;
+            }
+        }
+        if !terminated {
+            out.push('&');
+            out.push_str(&entity);
+            continue;
         }
         match entity.as_str() {
             "amp" => out.push('&'),

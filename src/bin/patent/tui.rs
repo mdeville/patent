@@ -670,7 +670,8 @@ fn handle_event(app: &mut App, table_state: &TableState, table_area: Rect) -> st
 }
 
 fn is_safe_url(url: &str) -> bool {
-    url.starts_with("https://") || url.starts_with("http://")
+    let lower = url.to_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://")
 }
 
 /// Open the selected match's URL in the default browser, if any.
@@ -946,6 +947,8 @@ mod tests {
     fn is_safe_url_allows_https_and_http_only() {
         assert!(is_safe_url("https://crates.io/crates/tokio"));
         assert!(is_safe_url("http://example.com/path"));
+        assert!(is_safe_url("HTTPS://example.com")); // uppercase scheme must be accepted
+        assert!(is_safe_url("HTTP://example.com"));
         assert!(!is_safe_url("file:///etc/passwd"));
         assert!(!is_safe_url("javascript:alert(1)"));
         assert!(!is_safe_url(""));

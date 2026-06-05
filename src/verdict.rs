@@ -33,9 +33,10 @@ pub fn build_prompt(query: &Query, matches: &[Match], sources_checked: &[Source]
     let mut prompt = String::new();
 
     prompt.push_str(&format!(
-        "You are a prior-art analyst for SOFTWARE DEVELOPER TOOLS ONLY. The user has an \
-         idea for a dev tool and we searched these open-source sources for existing \
-         implementations: {}.\n\n",
+        "You are a skeptical prior-art analyst for SOFTWARE DEVELOPER TOOLS ONLY. Your \
+         default assumption is that the idea has already been built — lean toward Crowded \
+         or Saturated when in doubt. The user has an idea for a dev tool and we searched \
+         these open-source sources for existing implementations: {}.\n\n",
         source_list(sources_checked),
     ));
 
@@ -243,6 +244,29 @@ fn floor_level(model_level: Saturation, matches: &[Match]) -> Saturation {
     model_level.max(data_level)
 }
 
+/// True if `word` appears in `text` as a whole word (not as part of another word).
+fn is_whole_word(text: &str, word: &str) -> bool {
+    let mut remaining = text;
+    while let Some(pos) = remaining.find(word) {
+        let before_ok = remaining[..pos]
+            .chars()
+            .next_back()
+            .map_or(true, |c| !c.is_alphanumeric());
+        let after_ok = remaining[pos + word.len()..]
+            .chars()
+            .next()
+            .map_or(true, |c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        remaining = &remaining[pos + word.len()..];
+        if remaining.is_empty() {
+            break;
+        }
+    }
+    false
+}
+
 /// Extract JSON from a model response that may be wrapped in markdown fences.
 fn extract_json(raw: &str) -> &str {
     let trimmed = raw.trim();
@@ -287,11 +311,22 @@ fn parse_verdict(
 
     // Gaps render verbatim, so they get the same absence-claim guard as the
     // headline: a gap that asserts non-existence is dropped rather than shown.
+    // Also drop any gap that names a top-10 match — if the model mentions a
+    // known tool in a gap it is confirming it exists, not identifying open space.
+    let top_names: Vec<String> = matches
+        .iter()
+        .take(10)
+        .map(|m| m.name.to_lowercase())
+        .collect();
     let gaps: Vec<String> = match v["gaps"].as_array() {
         Some(arr) => arr
             .iter()
             .filter_map(|g| g.as_str().map(String::from))
             .filter(|g| !contains_absence_phrase(g))
+            .filter(|g| {
+                let lower = g.to_lowercase();
+                !top_names.iter().any(|name| is_whole_word(&lower, name))
+            })
             .collect(),
         None => vec![],
     };
@@ -360,6 +395,12 @@ pub async fn assess(
     sources_failed: Vec<Source>,
 ) -> crate::Result<Verdict> {
     let prompt = build_prompt(query, matches, &sources_checked);
-    let raw = llm.generate(&prompt).await?;
+    let raw = match llm.generate(&prompt).await {
+        Ok(r) => r,
+        Err(_) => {
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            llm.generate(&prompt).await?
+        }
+    };
     parse_verdict(&raw, matches, sources_checked, sources_failed)
 }

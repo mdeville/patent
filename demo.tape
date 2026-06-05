@@ -27,9 +27,12 @@ Type `patent "interactive cli to kill whatever's on a port"`
 Sleep 600ms
 Enter
 
-# Searching → ranking → verdict, then the TUI paints (warm ~5.5s, cold model
-# load ~9s). Bump this up if your machine or model is slower.
+# Search → ranking → verdict happen off-screen (Hide) so the README loop isn't
+# half spinner. The command + Enter stay visible above; the TUI just appears.
+# Bump the sleep if your machine or model is slower (warm ~5.5s, cold ~9s).
+Hide
 Sleep 10s
+Show
 
 # Scroll through the ranked matches.
 Down@350ms 5
