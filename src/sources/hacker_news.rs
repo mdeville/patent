@@ -117,7 +117,7 @@ impl SourceAdapter for HackerNews {
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
         let url = format!("{}/api/v1/search", self.base_url);
-        let q = query.keywords.join(" ");
+        let q = query.idea.clone();
 
         let body: SearchResponse = self
             .client

@@ -37,6 +37,19 @@ impl GitHub {
             token: None,
         }
     }
+
+    /// Construct against an arbitrary base URL with an explicit token (used by tests).
+    pub fn with_base_url_and_token(
+        client: reqwest::Client,
+        base_url: String,
+        token: String,
+    ) -> Self {
+        Self {
+            client,
+            base_url,
+            token: Some(token),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,24 +75,36 @@ impl SourceAdapter for GitHub {
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
         let url = format!("{}/search/repositories", self.base_url);
-        let q = query.keywords.join(" ");
+        let q = format!("{} in:description,readme", query.keywords.join(" "));
 
         let mut request = self
             .client
             .get(&url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-            .query(&[("q", q.as_str()), ("per_page", "20")]);
+            .query(&[("q", q.as_str()), ("sort", "stars"), ("per_page", "20")]);
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
         }
 
         let response = request.send().await?;
-        if response.status() == reqwest::StatusCode::FORBIDDEN && self.token.is_none() {
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(crate::Error::Parse(
-                "GitHub API rate limit exceeded — set GITHUB_TOKEN env var for higher limits"
-                    .into(),
+                "GitHub API returned 401 — check that GITHUB_TOKEN is valid".into(),
             ));
+        }
+        if status == reqwest::StatusCode::FORBIDDEN {
+            if self.token.is_some() {
+                return Err(crate::Error::Parse(
+                    "GitHub API rate limit exceeded even with token — try again later".into(),
+                ));
+            } else {
+                return Err(crate::Error::Parse(
+                    "GitHub API rate limit exceeded — set GITHUB_TOKEN env var for higher limits"
+                        .into(),
+                ));
+            }
         }
         let body: SearchResponse = response.error_for_status()?.json().await?;
 

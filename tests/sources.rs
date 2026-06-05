@@ -131,6 +131,29 @@ async fn crates_io_sends_joined_keywords_as_query_and_a_user_agent() {
 }
 
 #[tokio::test]
+async fn crates_io_user_agent_contains_correct_github_handle() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/crates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(two_crate_body()))
+        .mount(&server)
+        .await;
+
+    source_for(&server).search(&query()).await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let ua = requests[0]
+        .headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ua.contains("r14dd/patent"),
+        "expected 'r14dd/patent' in User-Agent, got: {ua}"
+    );
+}
+
+#[tokio::test]
 async fn crates_io_null_description_becomes_empty_string() {
     let server = MockServer::start().await;
     let body = json!({
@@ -273,7 +296,8 @@ async fn github_sends_query_and_user_agent() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/search/repositories"))
-        .and(query_param("q", "async runtime"))
+        .and(query_param("q", "async runtime in:description,readme"))
+        .and(query_param("sort", "stars"))
         .and(header_exists("user-agent"))
         .respond_with(ResponseTemplate::new(200).set_body_json(github_body()))
         .expect(1)
@@ -333,6 +357,65 @@ async fn github_server_error_is_propagated() {
     assert!(github_for(&server).search(&query()).await.is_err());
 }
 
+#[tokio::test]
+async fn github_401_with_token_returns_auth_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/repositories"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let src = GitHub::with_base_url_and_token(
+        reqwest::Client::new(),
+        server.uri(),
+        "bad-token".to_string(),
+    );
+    let err = src.search(&query()).await.unwrap_err();
+    let msg = err.to_string().to_lowercase();
+    assert!(
+        msg.contains("401") || msg.contains("token") || msg.contains("invalid"),
+        "expected auth error, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn github_403_with_token_returns_rate_limit_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/repositories"))
+        .respond_with(ResponseTemplate::new(403).append_header("X-RateLimit-Remaining", "0"))
+        .mount(&server)
+        .await;
+
+    let src = GitHub::with_base_url_and_token(
+        reqwest::Client::new(),
+        server.uri(),
+        "valid-token".to_string(),
+    );
+    let err = src.search(&query()).await.unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("rate limit"),
+        "expected rate limit error, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn github_403_without_token_returns_rate_limit_hint() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/repositories"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let err = github_for(&server).search(&query()).await.unwrap_err();
+    assert!(
+        err.to_string().contains("GITHUB_TOKEN"),
+        "expected GITHUB_TOKEN hint, got: {err}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // npm
 // ---------------------------------------------------------------------------
@@ -386,7 +469,7 @@ async fn npm_sends_text_query_param() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/-/v1/search"))
-        .and(query_param("text", "async runtime"))
+        .and(query_param("text", "a fast async runtime for rust"))
         .respond_with(ResponseTemplate::new(200).set_body_json(npm_body()))
         .expect(1)
         .mount(&server)
@@ -614,7 +697,7 @@ async fn hn_sends_query_param() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/search"))
-        .and(query_param("query", "async runtime"))
+        .and(query_param("query", "a fast async runtime for rust"))
         .respond_with(ResponseTemplate::new(200).set_body_json(hn_body()))
         .expect(1)
         .mount(&server)
@@ -891,6 +974,7 @@ async fn maven_maps_artifacts_into_matches() {
         "https://central.sonatype.com/artifact/com.google.guava/guava"
     );
     assert_eq!(matches[0].popularity, Some(50));
+    assert_eq!(matches[0].description, "guava");
 }
 
 #[tokio::test]

@@ -75,7 +75,7 @@ impl SourceAdapter for Maven {
                 let name = format!("{}:{}", d.g, d.a);
                 let url = format!("https://central.sonatype.com/artifact/{}/{}", d.g, d.a);
                 Match {
-                    description: d.g.clone(),
+                    description: d.a.clone(),
                     name,
                     source: Source::Maven,
                     url,

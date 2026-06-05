@@ -267,7 +267,11 @@ fn draw(frame: &mut Frame, app: &App, table_state: &mut TableState) -> Rect {
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Cell::from(m.source.to_string()).style(Style::default().fg(source_color(m.source))),
+                Cell::from(m.source.to_string()).style(
+                    Style::default()
+                        .fg(source_color(m.source))
+                        .add_modifier(Modifier::DIM),
+                ),
                 Cell::from(m.description.as_str())
                     .style(Style::default().add_modifier(Modifier::DIM)),
             ])
@@ -305,9 +309,9 @@ fn draw(frame: &mut Frame, app: &App, table_state: &mut TableState) -> Rect {
         rows,
         [
             Constraint::Length(6),
-            Constraint::Length(24),
-            Constraint::Length(14),
-            Constraint::Min(20),
+            Constraint::Fill(1),
+            Constraint::Length(12),
+            Constraint::Fill(2),
         ],
     )
     .header(
@@ -341,7 +345,8 @@ fn draw(frame: &mut Frame, app: &App, table_state: &mut TableState) -> Rect {
     // Chrome = top border + header row + header bottom_margin + bottom border.
     let viewport = table_area.height.saturating_sub(4);
     if (displayed.len() as u16) > viewport && viewport > 0 {
-        let mut sb_state = ScrollbarState::new(displayed.len()).position(app.cursor());
+        let mut sb_state = ScrollbarState::new(displayed.len().saturating_sub(viewport as usize))
+            .position(table_state.offset());
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
@@ -664,10 +669,16 @@ fn handle_event(app: &mut App, table_state: &TableState, table_area: Rect) -> st
     Ok(())
 }
 
+fn is_safe_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
+}
+
 /// Open the selected match's URL in the default browser, if any.
 fn open_selected(app: &App) {
     if let Some(url) = app.selected_url() {
-        let _ = open::that(url);
+        if is_safe_url(url) {
+            let _ = open::that(url);
+        }
     }
 }
 
@@ -862,5 +873,82 @@ mod tests {
         for (w, h) in [(1u16, 1u16), (10, 3), (40, 8)] {
             let _ = rendered_with(w, h, &v, &many_matches(5), |app| app.enter_detail());
         }
+    }
+
+    #[test]
+    fn name_column_not_truncated_at_100_wide() {
+        let v = verdict_with(0, vec![]);
+        let long_name = "longname-x25-toolname-abc"; // 25 chars — exceeds current Length(24)
+        let m = Match {
+            name: long_name.to_string(),
+            source: Source::Npm,
+            url: "https://example.com/long".into(),
+            description: "a tool".into(),
+            popularity: Some(100),
+            similarity: 0.9,
+        };
+        let text = rendered(100, 30, &v, &[m]);
+        assert!(
+            text.contains(long_name),
+            "name column should show full 25-char name at 100 wide"
+        );
+    }
+
+    #[test]
+    fn scrollbar_does_not_move_within_viewport() {
+        // Moving cursor by 1 (still within the visible viewport) must NOT shift
+        // the scrollbar thumb — the thumb tracks the viewport offset, not the
+        // cursor index.
+        let v = verdict_with(0, vec![]);
+        let matches = many_matches(50);
+
+        let scrollbar_col = |app: &App| -> Vec<String> {
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            let mut ts = TableState::default();
+            terminal
+                .draw(|f| {
+                    draw(f, app, &mut ts);
+                })
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| i % 80 == 79)
+                .map(|(_, c)| c.symbol().to_string())
+                .collect()
+        };
+
+        let app_at_0 = App::new(
+            "an interactive cli to manage processes on a port",
+            &v,
+            &matches,
+        );
+        let mut app_at_5 = App::new(
+            "an interactive cli to manage processes on a port",
+            &v,
+            &matches,
+        );
+        for _ in 0..5 {
+            app_at_5.scroll_down();
+        }
+
+        assert_eq!(
+            scrollbar_col(&app_at_0),
+            scrollbar_col(&app_at_5),
+            "scrollbar must not move when cursor stays within viewport"
+        );
+    }
+
+    #[test]
+    fn is_safe_url_allows_https_and_http_only() {
+        assert!(is_safe_url("https://crates.io/crates/tokio"));
+        assert!(is_safe_url("http://example.com/path"));
+        assert!(!is_safe_url("file:///etc/passwd"));
+        assert!(!is_safe_url("javascript:alert(1)"));
+        assert!(!is_safe_url(""));
+        assert!(!is_safe_url("data:text/html,<script>alert(1)</script>"));
     }
 }

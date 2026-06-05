@@ -13,7 +13,7 @@ const DEFAULT_BASE_URL: &str = "https://crates.io";
 const USER_AGENT: &str = concat!(
     "patent/",
     env!("CARGO_PKG_VERSION"),
-    " (prior-art search; https://github.com/riad/patent)"
+    " (prior-art search; https://github.com/r14dd/patent)"
 );
 
 /// Searches the crates.io registry.

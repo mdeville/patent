@@ -52,7 +52,7 @@ impl SourceAdapter for Npm {
 
     async fn search(&self, query: &Query) -> Result<Vec<Match>> {
         let url = format!("{}/-/v1/search", self.base_url);
-        let text = query.keywords.join(" ");
+        let text = query.idea.clone();
 
         let body: SearchResponse = self
             .client
