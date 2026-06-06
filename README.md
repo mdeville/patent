@@ -34,6 +34,10 @@ Pre-built binaries are on the [releases page](https://github.com/r14dd/patent/re
 
 **GitHub token** (optional) — set `GITHUB_TOKEN` to raise the search rate limit from 10 to 30 requests/minute.
 
+**Linux build deps** — needed before `cargo install`:
+- Fedora / RHEL: `sudo dnf install openssl-devel gcc-c++`
+- Ubuntu / Debian: `sudo apt install libssl-dev g++`
+
 ## Usage
 
 ```bash
