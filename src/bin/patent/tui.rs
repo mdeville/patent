@@ -1137,9 +1137,11 @@ mod tests {
             similarity: 0.9,
         };
         // At scroll=0, "lastword" is beyond the viewport.
-        let t0 = rendered_with(100, 30, &v, &[m.clone()], |app| app.enter_detail());
+        let t0 = rendered_with(100, 30, &v, std::slice::from_ref(&m), |app| {
+            app.enter_detail()
+        });
         // After scrolling to the end, it should be visible.
-        let t_end = rendered_with(100, 30, &v, &[m], |app| {
+        let t_end = rendered_with(100, 30, &v, std::slice::from_ref(&m), |app| {
             app.enter_detail();
             for _ in 0..50 {
                 app.scroll_detail_down();
