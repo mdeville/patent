@@ -23,6 +23,9 @@ exclude = [
     "demo.gif",
     "social-preview.png",
     "dist-workspace.toml",
+    "showcase.tape",
+    "showcase.gif",
+    "showcase.png",
 ]
 
 [lib]
