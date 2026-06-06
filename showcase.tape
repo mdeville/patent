@@ -20,7 +20,7 @@ Set Padding 24
 Set Theme "Dracula"
 
 # Show the CLI invocation — product name and usage are visible from frame one.
-Type `patent "interactive TUI for exploring git history and commits"`
+Type `patent "fuzzy finder for searching files and text in the terminal"`
 Sleep 600ms
 Enter
 

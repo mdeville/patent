@@ -17,7 +17,7 @@
 `patent` takes a plain-English dev-tool idea and searches 11 open-source registries — crates.io, npm, PyPI, GitHub, and more. Results are ranked by semantic similarity and summarised as **Open**, **Crowded**, or **Saturated**.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r14dd/patent/main/demo.gif" alt="patent demo" width="720">
+  <img src="https://raw.githubusercontent.com/r14dd/patent/main/showcase.gif" alt="patent demo" width="720">
 </p>
 
 > Like a patent search, but for code. It finds prior art, yet, never certifies absence.
