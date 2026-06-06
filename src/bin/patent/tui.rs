@@ -403,11 +403,12 @@ fn draw(frame: &mut Frame, app: &App, table_state: &mut TableState) -> Rect {
             label_span(" close help"),
         ],
         Mode::Detail => vec![
-            label_span(" "),
+            key_span(" ↑↓"),
+            label_span(" scroll  "),
             key_span("o"),
             label_span(" / "),
             key_span("Enter"),
-            label_span(" open in browser  "),
+            label_span(" open  "),
             key_span("Esc"),
             label_span(" close"),
         ],
@@ -426,79 +427,151 @@ fn draw(frame: &mut Frame, app: &App, table_state: &mut TableState) -> Rect {
     table_area
 }
 
-/// Floating popup with the selected match's full, untruncated details — the
-/// table clips descriptions and hides the URL/popularity, so this is where you
-/// actually read a match before opening it. (Inspired by flawz / gpg-tui.)
+/// Word-wrap `text` to `width` columns, returning one string per visual line.
+fn word_wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.len() + 1 + word.len() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(current.clone());
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Floating popup with the selected match's full details.
 fn draw_detail(frame: &mut Frame, app: &App) {
     let Some(m) = app.selected_match() else {
         return;
     };
-    let area = centered_rect(72, 60, frame.area());
+    let area = centered_rect(74, 62, frame.area());
     frame.render_widget(Clear, area);
 
-    let popularity = match m.popularity {
-        Some(p) => p.to_string(),
+    let score_col = score_color(m.similarity);
+
+    // Inner width for word-wrapping: popup minus borders (2) minus indent (2).
+    let inner_w = (area.width as usize).saturating_sub(4);
+
+    let desc_lines = word_wrap(&m.description, inner_w);
+    // Fixed chrome: top border + empty + name + meta + empty + empty + url + empty + bottom border
+    let chrome: u16 = 9;
+    let viewport = (area.height.saturating_sub(chrome)) as usize;
+    let max_scroll = desc_lines.len().saturating_sub(viewport.max(1));
+    let scroll = app.detail_scroll_offset().min(max_scroll);
+
+    let pop_str = match m.popularity {
         None => "—".to_string(),
+        Some(p) if p >= 1_000_000 => format!("{}M ★", p / 1_000_000),
+        Some(p) if p >= 1_000 => format!("{}k ★", p / 1_000),
+        Some(p) => format!("{p} ★"),
     };
-    let label = |s: &'static str| Span::styled(format!("  {s:<12}"), Style::default().fg(MUTED));
 
-    let lines = vec![
-        Line::raw(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                m.name.as_str(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::raw(""),
-        Line::from(vec![
-            label("Source"),
-            Span::styled(
-                m.source.to_string(),
-                Style::default().fg(source_color(m.source)),
-            ),
-        ]),
-        Line::from(vec![
-            label("Similarity"),
-            Span::styled(
-                format!("{:.2}", m.similarity),
-                Style::default().fg(score_color(m.similarity)),
-            ),
-        ]),
-        Line::from(vec![label("Popularity"), Span::raw(popularity)]),
-        Line::raw(""),
-        Line::from(label("URL")),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                m.url.as_str(),
-                Style::default()
-                    .fg(ACCENT)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-        ]),
-        Line::raw(""),
-        Line::from(label("Description")),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(m.description.as_str(), Style::default().fg(Color::White)),
-        ]),
-    ];
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::raw(""));
 
-    let detail = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
-            .title(Span::styled(
-                " Match Details ",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            )),
-    );
-    frame.render_widget(detail, area);
+    lines.push(Line::from(Span::styled(
+        format!("  {}", m.name),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            m.source.to_string(),
+            Style::default().fg(source_color(m.source)),
+        ),
+        Span::styled("  ·  ", Style::default().fg(MUTED)),
+        Span::styled(
+            format!("{:.2}", m.similarity),
+            Style::default().fg(score_col).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ·  ", Style::default().fg(MUTED)),
+        Span::styled(pop_str, Style::default().fg(MUTED)),
+    ]));
+
+    lines.push(Line::raw(""));
+
+    let shown: Vec<&str> = desc_lines
+        .iter()
+        .skip(scroll)
+        .take(viewport.max(1))
+        .map(|s| s.as_str())
+        .collect();
+
+    if shown.is_empty() {
+        lines.push(Line::from(Span::styled("  —", Style::default().fg(MUTED))));
+    } else {
+        for seg in &shown {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(*seg, Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ↳ ", Style::default().fg(MUTED)),
+        Span::styled(
+            m.url.as_str(),
+            Style::default()
+                .fg(ACCENT)
+                .add_modifier(Modifier::UNDERLINED),
+        ),
+    ]));
+    lines.push(Line::raw(""));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(score_col))
+        .title(Line::from(Span::styled(
+            format!(" {} ", m.name),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .title(
+            Line::from(Span::styled(
+                format!(" {:.2} ", m.similarity),
+                Style::default().fg(score_col).add_modifier(Modifier::BOLD),
+            ))
+            .right_aligned(),
+        );
+
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+
+    if desc_lines.len() > viewport.max(1) {
+        let mut sb = ScrollbarState::new(max_scroll).position(scroll);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .thumb_style(Style::default().fg(score_col)),
+            area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut sb,
+        );
+    }
 }
 
 fn draw_help(frame: &mut Frame) {
@@ -636,6 +709,8 @@ fn handle_event(app: &mut App, table_state: &TableState, table_area: Rect) -> st
                 },
                 Mode::Detail => match key.code {
                     KeyCode::Char('o') | KeyCode::Enter => open_selected(app),
+                    KeyCode::Down | KeyCode::Char('j') => app.scroll_detail_down(),
+                    KeyCode::Up | KeyCode::Char('k') => app.scroll_detail_up(),
                     KeyCode::Esc | KeyCode::Char('q') => app.exit_detail(),
                     _ => {}
                 },
@@ -859,13 +934,14 @@ mod tests {
 
     #[test]
     fn detail_popup_shows_full_match_info() {
-        // The detail popup is where the otherwise-truncated URL and description
-        // are shown in full.
         let v = verdict_with(1, vec![]);
         let text = rendered_with(100, 30, &v, &many_matches(5), |app| app.enter_detail());
-        assert!(text.contains("Match Details"), "detail popup title shown");
+        assert!(text.contains("tool-0"), "match name shown in popup");
         assert!(text.contains("https://example.com/0"), "full URL shown");
-        assert!(text.contains("Description"), "description label shown");
+        assert!(
+            text.contains("a tool that does something useful"),
+            "description shown"
+        );
     }
 
     #[test]
@@ -941,6 +1017,200 @@ mod tests {
             scrollbar_col(&app_at_5),
             "scrollbar must not move when cursor stays within viewport"
         );
+    }
+
+    // ── word_wrap edge cases ────────────────────────────────────────────────
+
+    #[test]
+    fn word_wrap_empty_and_whitespace() {
+        assert_eq!(word_wrap("", 40), vec![""]);
+        assert_eq!(word_wrap("   ", 40), vec![""]);
+    }
+
+    #[test]
+    fn word_wrap_single_short_word() {
+        assert_eq!(word_wrap("hello", 40), vec!["hello"]);
+    }
+
+    #[test]
+    fn word_wrap_splits_at_width() {
+        // "hello world" — 11 chars — splits because 5+1+5 = 11 > 8
+        let lines = word_wrap("hello world", 8);
+        assert_eq!(lines, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn word_wrap_fits_on_one_line() {
+        let lines = word_wrap("hello world", 20);
+        assert_eq!(lines, vec!["hello world"]);
+    }
+
+    #[test]
+    fn word_wrap_word_longer_than_width_is_not_split() {
+        // No hyphenation: long tokens go on their own line unbroken.
+        let lines = word_wrap("averylongwordwithoutanyspaces", 10);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "averylongwordwithoutanyspaces");
+    }
+
+    #[test]
+    fn word_wrap_zero_width() {
+        let lines = word_wrap("hello world", 0);
+        assert_eq!(lines, vec!["hello world"]);
+    }
+
+    // ── detail popup edge cases ─────────────────────────────────────────────
+
+    #[test]
+    fn detail_popup_empty_description_does_not_panic() {
+        let v = verdict_with(0, vec![]);
+        let m = Match {
+            name: "no-desc".to_string(),
+            source: Source::CratesIo,
+            url: "https://example.com/no-desc".into(),
+            description: String::new(),
+            popularity: None,
+            similarity: 0.5,
+        };
+        let text = rendered_with(100, 30, &v, &[m], |app| app.enter_detail());
+        assert!(
+            text.contains("no-desc"),
+            "name shown with empty description"
+        );
+    }
+
+    #[test]
+    fn detail_popup_no_popularity_shows_dash() {
+        let v = verdict_with(0, vec![]);
+        let m = Match {
+            name: "no-pop".to_string(),
+            source: Source::CratesIo,
+            url: "https://example.com".into(),
+            description: "something".into(),
+            popularity: None,
+            similarity: 0.6,
+        };
+        let text = rendered_with(100, 30, &v, &[m], |app| app.enter_detail());
+        assert!(text.contains('—'), "dash shown when popularity is None");
+    }
+
+    #[test]
+    fn detail_popup_long_name_does_not_panic() {
+        let v = verdict_with(0, vec![]);
+        let m = Match {
+            name: "a".repeat(80),
+            source: Source::GitHub,
+            url: "https://github.com/x/y".into(),
+            description: "tool".into(),
+            popularity: Some(42),
+            similarity: 0.8,
+        };
+        let _ = rendered_with(80, 24, &v, &[m], |app| app.enter_detail());
+    }
+
+    #[test]
+    fn detail_popup_very_long_url_does_not_panic() {
+        let v = verdict_with(0, vec![]);
+        let m = Match {
+            name: "long-url".to_string(),
+            source: Source::GitHub,
+            url: format!("https://github.com/{}", "x".repeat(200)),
+            description: "a tool".into(),
+            popularity: None,
+            similarity: 0.7,
+        };
+        let _ = rendered_with(80, 24, &v, &[m], |app| app.enter_detail());
+    }
+
+    #[test]
+    fn detail_popup_scroll_shows_bottom_of_long_description() {
+        let v = verdict_with(0, vec![]);
+        // Build a description long enough that "lastword" is only visible after scrolling.
+        let mut words: Vec<String> = (0..40).map(|i| format!("word{i}")).collect();
+        words.push("lastword".to_string());
+        let m = Match {
+            name: "long-desc".to_string(),
+            source: Source::CratesIo,
+            url: "https://example.com".into(),
+            description: words.join(" "),
+            popularity: None,
+            similarity: 0.9,
+        };
+        // At scroll=0, "lastword" is beyond the viewport.
+        let t0 = rendered_with(100, 30, &v, &[m.clone()], |app| app.enter_detail());
+        // After scrolling to the end, it should be visible.
+        let t_end = rendered_with(100, 30, &v, &[m], |app| {
+            app.enter_detail();
+            for _ in 0..50 {
+                app.scroll_detail_down();
+            }
+        });
+        assert!(
+            !t0.contains("lastword") || t_end.contains("lastword"),
+            "lastword visible after scrolling to end"
+        );
+        assert!(t_end.contains("lastword"), "lastword visible at scroll end");
+    }
+
+    #[test]
+    fn detail_popup_scroll_clamps_visually_when_overscrolled() {
+        // Hammering j past the end should not panic and should still show content.
+        let v = verdict_with(0, vec![]);
+        let m = Match {
+            name: "clamp-test".to_string(),
+            source: Source::Npm,
+            url: "https://example.com".into(),
+            description: "short".into(),
+            popularity: Some(1),
+            similarity: 0.5,
+        };
+        let text = rendered_with(100, 30, &v, &[m], |app| {
+            app.enter_detail();
+            for _ in 0..1000 {
+                app.scroll_detail_down();
+            }
+        });
+        assert!(
+            text.contains("clamp-test"),
+            "name still visible after overscroll"
+        );
+        assert!(
+            text.contains("short"),
+            "description still visible after overscroll"
+        );
+    }
+
+    #[test]
+    fn detail_scroll_resets_when_reopened() {
+        let v = verdict_with(0, vec![]);
+        let mut words: Vec<String> = (0..40).map(|i| format!("word{i}")).collect();
+        words.push("lastword".to_string());
+        let m = Match {
+            name: "reset-test".to_string(),
+            source: Source::CratesIo,
+            url: "https://example.com".into(),
+            description: words.join(" "),
+            popularity: None,
+            similarity: 0.9,
+        };
+        // Scroll to end, then close and reopen — should be back at top (word0 visible).
+        let text = rendered_with(100, 30, &v, &[m], |app| {
+            app.enter_detail();
+            for _ in 0..50 {
+                app.scroll_detail_down();
+            }
+            app.exit_detail();
+            app.enter_detail();
+        });
+        assert!(text.contains("word0"), "scroll reset to top after reopen");
+    }
+
+    #[test]
+    fn detail_popup_renders_at_all_common_sizes() {
+        let v = verdict_with(2, vec![Source::PyPI]);
+        for (w, h) in [(80u16, 24u16), (100, 30), (120, 40), (60, 20)] {
+            let _ = rendered_with(w, h, &v, &many_matches(5), |app| app.enter_detail());
+        }
     }
 
     #[test]

@@ -58,6 +58,7 @@ pub struct App<'a> {
     expanded: bool,
     quit: bool,
     sort: SortKey,
+    detail_scroll: usize,
 }
 
 impl<'a> App<'a> {
@@ -74,6 +75,7 @@ impl<'a> App<'a> {
             expanded: false,
             quit: false,
             sort: SortKey::Similarity,
+            detail_scroll: 0,
         };
         app.apply_sort();
         app
@@ -228,13 +230,27 @@ impl<'a> App<'a> {
     /// Open the detail popup for the selected match (no-op if none selected).
     pub fn enter_detail(&mut self) {
         if self.selected_match().is_some() {
+            self.detail_scroll = 0;
             self.mode = Mode::Detail;
         }
     }
 
     /// Close the detail popup, returning to the list.
     pub fn exit_detail(&mut self) {
+        self.detail_scroll = 0;
         self.mode = Mode::Normal;
+    }
+
+    pub fn detail_scroll_offset(&self) -> usize {
+        self.detail_scroll
+    }
+
+    pub fn scroll_detail_down(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_add(1);
+    }
+
+    pub fn scroll_detail_up(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(1);
     }
 
     /// The current match sort order.
