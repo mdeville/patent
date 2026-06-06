@@ -5,8 +5,8 @@
 use serde::Deserialize;
 
 use super::SourceAdapter;
-use crate::model::{Match, Query, Source};
 use crate::Result;
+use crate::model::{Match, Query, Source};
 
 const DEFAULT_SEARCH_URL: &str = "https://azuresearch-usnc.nuget.org";
 

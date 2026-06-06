@@ -9,6 +9,7 @@
 use patent::model::{Match, Saturation, Source, Verdict};
 use patent::tui::{App, Mode};
 use ratatui::{
+    DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -16,7 +17,6 @@ use ratatui::{
         Block, BorderType, Borders, Cell, Clear, HighlightSpacing, Paragraph, Row, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
     },
-    DefaultTerminal, Frame,
 };
 
 use crossterm::{
@@ -751,10 +751,10 @@ fn is_safe_url(url: &str) -> bool {
 
 /// Open the selected match's URL in the default browser, if any.
 fn open_selected(app: &App) {
-    if let Some(url) = app.selected_url() {
-        if is_safe_url(url) {
-            let _ = open::that(url);
-        }
+    if let Some(url) = app.selected_url()
+        && is_safe_url(url)
+    {
+        let _ = open::that(url);
     }
 }
 
@@ -799,7 +799,7 @@ fn run_loop(
 mod tests {
     use super::*;
     use patent::verdict::CAVEAT;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     fn verdict_with(gaps: usize, failed: Vec<Source>) -> Verdict {
         Verdict {

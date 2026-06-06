@@ -3,8 +3,8 @@
 use serde::Deserialize;
 
 use super::SourceAdapter;
-use crate::model::{Match, Query, Source};
 use crate::Result;
+use crate::model::{Match, Query, Source};
 
 const DEFAULT_BASE_URL: &str = "https://hub.docker.com";
 

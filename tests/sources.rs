@@ -18,7 +18,7 @@ use patent::sources::nuget::NuGet;
 use patent::sources::pypi::PyPI;
 use patent::sources::rubygems::RubyGems;
 use patent::sources::vscode::VsCodeMarketplace;
-use patent::sources::{dedup, search_sources, SearchOutcome, SourceAdapter};
+use patent::sources::{SearchOutcome, SourceAdapter, dedup, search_sources};
 use serde_json::json;
 use wiremock::matchers::{header_exists, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -338,11 +338,13 @@ async fn github_empty_results_is_ok() {
         .mount(&server)
         .await;
 
-    assert!(github_for(&server)
-        .search(&query())
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        github_for(&server)
+            .search(&query())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

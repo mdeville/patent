@@ -3,8 +3,8 @@
 use serde::Deserialize;
 
 use super::SourceAdapter;
-use crate::model::{Match, Query, Source};
 use crate::Result;
+use crate::model::{Match, Query, Source};
 
 /// Default crates.io host. Overridable in tests via [`CratesIo::with_base_url`].
 const DEFAULT_BASE_URL: &str = "https://crates.io";
