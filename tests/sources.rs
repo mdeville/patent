@@ -95,7 +95,10 @@ async fn crates_io_maps_results_into_matches() {
 }
 
 #[tokio::test]
-async fn crates_io_links_to_the_canonical_crate_page() {
+async fn crates_io_links_use_the_configured_base_url() {
+    // The result `url` field is built from `self.base_url`, so a request
+    // served by a mock server (or a crates.io mirror) should surface links
+    // against the same host we queried, not the hard-coded production host.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/crates"))
@@ -105,10 +108,8 @@ async fn crates_io_links_to_the_canonical_crate_page() {
 
     let matches = source_for(&server).search(&query()).await.unwrap();
 
-    // The URL we surface is the public crates.io page, independent of the host
-    // we actually queried (here, the mock server).
-    assert_eq!(matches[0].url, "https://crates.io/crates/tokio");
-    assert_eq!(matches[1].url, "https://crates.io/crates/async-std");
+    assert_eq!(matches[0].url, format!("{}/crates/tokio", server.uri()));
+    assert_eq!(matches[1].url, format!("{}/crates/async-std", server.uri()));
 }
 
 #[tokio::test]

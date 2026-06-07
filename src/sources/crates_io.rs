@@ -77,7 +77,7 @@ impl SourceAdapter for CratesIo {
             .crates
             .into_iter()
             .map(|c| Match {
-                url: format!("{DEFAULT_BASE_URL}/crates/{}", c.name),
+                url: format!("{}/crates/{}", self.base_url, c.name),
                 name: c.name,
                 source: Source::CratesIo,
                 description: c.description.unwrap_or_default(),
