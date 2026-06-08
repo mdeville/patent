@@ -2,6 +2,13 @@
 //!
 //! The search API returns artifact coordinates but no descriptions, so the
 //! artifact name is the main signal for ranking.
+//!
+//! **Popularity signal:** the Solr payload exposes `versionCount` (how many
+//! releases the artifact has) but no download, star, or ranking field that
+//! is comparable to what the other sources populate. Storing `versionCount`
+//! as the `Match::popularity` would mis-label it in the TUI as a download
+//! count, so we leave it as `None` and surface the raw field in the
+//! description when callers need it.
 
 use serde::Deserialize;
 
@@ -43,8 +50,6 @@ struct SolrDoc {
     g: String,
     #[serde(default)]
     a: String,
-    #[serde(default, rename = "versionCount")]
-    version_count: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -79,7 +84,7 @@ impl SourceAdapter for Maven {
                     name,
                     source: Source::Maven,
                     url,
-                    popularity: d.version_count,
+                    popularity: None,
                     similarity: 0.0,
                 }
             })

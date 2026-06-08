@@ -1000,8 +1000,36 @@ async fn maven_maps_artifacts_into_matches() {
         matches[0].url,
         "https://central.sonatype.com/artifact/com.google.guava/guava"
     );
-    assert_eq!(matches[0].popularity, Some(50));
+    // Maven Central's Solr response has no download / star / rank field that
+    // is comparable to the popularity signals used by the other sources, so
+    // popularity is intentionally left as None.
+    assert_eq!(matches[0].popularity, None);
     assert_eq!(matches[0].description, "guava");
+}
+
+#[tokio::test]
+async fn maven_ignores_version_count_when_mapping_results() {
+    // versionCount is still a valid Solr field; the source must not surface
+    // it as a popularity signal, because that would mislead the TUI's
+    // popularity column.
+    let server = MockServer::start().await;
+    let body = json!({
+        "response": {
+            "docs": [
+                { "g": "com.google.guava", "a": "guava", "versionCount": 999_999 }
+            ]
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path("/solrsearch/select"))
+        .and(query_param("q", "async runtime"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let src = Maven::with_base_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    assert_eq!(matches[0].popularity, None);
 }
 
 #[tokio::test]
