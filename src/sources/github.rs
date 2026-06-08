@@ -4,8 +4,8 @@
 use serde::Deserialize;
 
 use super::SourceAdapter;
-use crate::Result;
 use crate::model::{Match, Query, Source};
+use crate::Result;
 
 const DEFAULT_BASE_URL: &str = "https://api.github.com";
 const USER_AGENT: &str = concat!("patent/", env!("CARGO_PKG_VERSION"), " (prior-art search)");

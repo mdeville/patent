@@ -251,11 +251,11 @@ fn is_whole_word(text: &str, word: &str) -> bool {
         let before_ok = remaining[..pos]
             .chars()
             .next_back()
-            .is_none_or(|c| !c.is_alphanumeric());
+            .map_or(true, |c| !c.is_alphanumeric());
         let after_ok = remaining[pos + word.len()..]
             .chars()
             .next()
-            .is_none_or(|c| !c.is_alphanumeric());
+            .map_or(true, |c| !c.is_alphanumeric());
         if before_ok && after_ok {
             return true;
         }

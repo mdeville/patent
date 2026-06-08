@@ -4,8 +4,8 @@
 use serde::Deserialize;
 
 use super::SourceAdapter;
-use crate::Result;
 use crate::model::{Match, Query, Source};
+use crate::Result;
 
 const DEFAULT_BASE_URL: &str = "https://hn.algolia.com";
 const MAX_DESC_LEN: usize = 120;
