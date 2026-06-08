@@ -95,7 +95,10 @@ async fn crates_io_maps_results_into_matches() {
 }
 
 #[tokio::test]
-async fn crates_io_links_to_the_canonical_crate_page() {
+async fn crates_io_links_use_the_configured_base_url() {
+    // The result `url` field is built from `self.base_url`, so a request
+    // served by a mock server (or a crates.io mirror) should surface links
+    // against the same host we queried, not the hard-coded production host.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/crates"))
@@ -105,10 +108,8 @@ async fn crates_io_links_to_the_canonical_crate_page() {
 
     let matches = source_for(&server).search(&query()).await.unwrap();
 
-    // The URL we surface is the public crates.io page, independent of the host
-    // we actually queried (here, the mock server).
-    assert_eq!(matches[0].url, "https://crates.io/crates/tokio");
-    assert_eq!(matches[1].url, "https://crates.io/crates/async-std");
+    assert_eq!(matches[0].url, format!("{}/crates/tokio", server.uri()));
+    assert_eq!(matches[1].url, format!("{}/crates/async-std", server.uri()));
 }
 
 #[tokio::test]
@@ -999,8 +1000,36 @@ async fn maven_maps_artifacts_into_matches() {
         matches[0].url,
         "https://central.sonatype.com/artifact/com.google.guava/guava"
     );
-    assert_eq!(matches[0].popularity, Some(50));
+    // Maven Central's Solr response has no download / star / rank field that
+    // is comparable to the popularity signals used by the other sources, so
+    // popularity is intentionally left as None.
+    assert_eq!(matches[0].popularity, None);
     assert_eq!(matches[0].description, "guava");
+}
+
+#[tokio::test]
+async fn maven_ignores_version_count_when_mapping_results() {
+    // versionCount is still a valid Solr field; the source must not surface
+    // it as a popularity signal, because that would mislead the TUI's
+    // popularity column.
+    let server = MockServer::start().await;
+    let body = json!({
+        "response": {
+            "docs": [
+                { "g": "com.google.guava", "a": "guava", "versionCount": 999_999 }
+            ]
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path("/solrsearch/select"))
+        .and(query_param("q", "async runtime"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let src = Maven::with_base_url(reqwest::Client::new(), server.uri());
+    let matches = src.search(&query()).await.unwrap();
+    assert_eq!(matches[0].popularity, None);
 }
 
 #[tokio::test]
